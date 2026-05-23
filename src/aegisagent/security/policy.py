@@ -20,7 +20,7 @@ DESTRUCTIVE_PATTERNS = [
 
 WRITE_VERBS = {"rm", "mv", "cp", "touch", "mkdir", "rmdir", "chmod", "chown", "tee", "sed", "python", "python3", "node", "npm", "pip", "git"}
 NETWORK_VERBS = {"curl", "wget", "ssh", "scp", "rsync", "ftp", "nc", "ncat", "telnet"}
-GIT_WRITE = {"push", "commit", "reset", "checkout", "switch", "merge", "rebase", "clean"}
+GIT_READ = {"status", "diff", "log", "show", "rev-parse"}
 
 
 @dataclass(frozen=True)
@@ -54,15 +54,30 @@ def classify_shell_command(command: str) -> CommandClassification:
     verb = tokens[0]
     if verb in NETWORK_VERBS:
         return CommandClassification(redacted, "network", "high", True, False, "network access is gated")
-    if verb == "git" and len(tokens) > 1 and tokens[1] in GIT_WRITE:
-        return CommandClassification(redacted, "git", "medium", True, False, "git mutation requires approval")
-    if verb in {"ls", "pwd", "cat", "sed", "awk", "rg", "grep", "find", "git"}:
+    if verb == "git":
+        if _git_command_is_read_only(tokens):
+            return CommandClassification(redacted, "shell", "low", False, False, "read-only shell command")
+        return CommandClassification(redacted, "git", "medium", True, False, "git mutation or network operation requires approval")
+    if verb in {"ls", "pwd", "cat", "sed", "awk", "rg", "grep", "find"}:
         if ">" in tokens or ">>" in tokens:
             return CommandClassification(redacted, "shell", "medium", True, False, "shell write redirection requires approval")
         return CommandClassification(redacted, "shell", "low", False, False, "read-only shell command")
     if verb in WRITE_VERBS:
         return CommandClassification(redacted, "shell", "medium", True, False, "host write or execution requires approval")
     return CommandClassification(redacted, "shell", "medium", True, False, "unknown command requires approval")
+
+
+def _git_command_is_read_only(tokens: list[str]) -> bool:
+    if len(tokens) < 2:
+        return True
+    subcommand = tokens[1]
+    if subcommand in GIT_READ:
+        return True
+    if subcommand == "branch":
+        return len(tokens) == 2 or all(token in {"--list", "-l", "--show-current"} for token in tokens[2:])
+    if subcommand == "remote":
+        return len(tokens) == 2 or all(token in {"-v", "--verbose"} for token in tokens[2:])
+    return False
 
 
 def decide_tool(tool: str, action: str, *, approved: bool = False, scope: str = "workspace") -> PolicyDecision:

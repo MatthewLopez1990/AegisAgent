@@ -164,8 +164,6 @@ SLASH_COMMANDS: tuple[tuple[str, str], ...] = (
     ("/git commit", "commit staged files after operator approval"),
     ("/git branch", "list, create, or switch branches through a typed tool"),
     ("/git remote", "list remotes or fetch, pull, and push after approval"),
-    ("/install", "show or write the macOS/Linux terminal command shim"),
-    ("/update", "pull latest code from GitHub after approval"),
     ("/edit replace", "replace exact file text only after explicit approval"),
     ("/test", "run default allowlisted tests through a typed non-shell tool"),
     ("/verify", "run an allowlisted verification command through a typed tool"),
@@ -179,6 +177,8 @@ SLASH_COMMANDS: tuple[tuple[str, str], ...] = (
     ("/agents profiles", "show planner/researcher/implementer/reviewer profiles"),
     ("/agents contracts", "show role context contracts, deliverables, and budgets"),
     ("/agents delegate", "run bounded local planner/researcher/implementer/reviewer agents"),
+    ("/agents live", "delegate and stream Hermes-style local agent progress"),
+    ("/agents stream", "alias for /agents live"),
     ("/agents bg", "start background agent work and keep composer usable"),
     ("/agents jobs", "list background agent jobs"),
     ("/agents monitor", "live repaint background agent job progress"),
@@ -954,7 +954,7 @@ def dispatch_interactive_command(command: str, paths: RuntimePaths) -> str:
         print("- Web is optional: use /web only when you want the browser console.")
         print("- Exit with q, Esc, /exit, or /quit.")
         return "help"
-    if command.startswith("/activation") or command.startswith("/activate"):
+    if _slash_invoked(command, "/activation") or _slash_invoked(command, "/activate"):
         print(format_terminal_activation(terminal_activation_payload(paths)))
         return "activation"
     if command.startswith("/commands") or command.startswith("/menu"):
@@ -965,11 +965,11 @@ def dispatch_interactive_command(command: str, paths: RuntimePaths) -> str:
             prefix = command.removeprefix("/menu").strip()
         print(_render_command_lanes(prefix))
         return "commands"
-    if command.startswith("/dashboard"):
+    if _slash_invoked(command, "/dashboard"):
         print(format_dashboard(dashboard_payload(paths)))
         return "dashboard"
-    if command.startswith("/install"):
-        raw = command.removeprefix("/install").strip()
+    if _slash_invoked(command, "/install"):
+        raw = _slash_remainder(command, "/install")
         parts = [part.strip() for part in raw.split("|", 1)]
         approved = len(parts) == 2 and parts[1].lower() in {"approve", "approved", "yes"}
         tokens = parts[0].split()
@@ -983,8 +983,8 @@ def dispatch_interactive_command(command: str, paths: RuntimePaths) -> str:
             result = install_terminal_shim(paths, name=name, approved=approved)
             _print_workspace_tool(result, audit, paths)
         return "install"
-    if command.startswith("/update"):
-        raw = command.removeprefix("/update").strip()
+    if _slash_invoked(command, "/update"):
+        raw = _slash_remainder(command, "/update")
         parts = [part.strip() for part in raw.split("|", 1)]
         approved = len(parts) == 2 and parts[1].lower() in {"approve", "approved", "yes"}
         tokens = parts[0].split()
@@ -1672,6 +1672,18 @@ def dispatch_interactive_command(command: str, paths: RuntimePaths) -> str:
     return "agent turn"
 
 
+def _slash_invoked(command: str, verb: str) -> bool:
+    if command == verb:
+        return True
+    if not command.startswith(verb):
+        return False
+    return command[len(verb) : len(verb) + 1] in {" ", "\t", "|"}
+
+
+def _slash_remainder(command: str, verb: str) -> str:
+    return command[len(verb) :].strip() if _slash_invoked(command, verb) else ""
+
+
 def normalize_interactive_command(command: str) -> str:
     stripped = command.strip()
     if stripped.startswith("//"):
@@ -1827,7 +1839,8 @@ def _print_workspace_tool(result: WorkspaceToolResult, audit: AuditLog, paths: R
             "tool": result.name,
             "status": result.status,
             "metadata": result.metadata,
-            "external_action_started": False,
+            "external_action_started": result.metadata.get("external_action_started", False),
+            "browser_auto_launch": result.metadata.get("browser_auto_launch", False),
         },
     )
     print(result.content)

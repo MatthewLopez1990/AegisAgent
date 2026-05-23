@@ -27,6 +27,9 @@ def terminal_activation_payload(paths: RuntimePaths) -> dict[str, Any]:
         },
         "tui_commands": [
             "/setup run-checks",
+            "/dashboard",
+            "/install",
+            "/update",
             "/capabilities",
             "/gaps",
             "/tasks",

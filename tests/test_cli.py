@@ -49,13 +49,22 @@ class CliTests(unittest.TestCase):
         update_text = update.read_text(encoding="utf-8")
         self.assertIn("git clone --branch", install_text)
         self.assertIn("git -C \"$INSTALL_DIR\" pull --ff-only origin \"$BRANCH\"", install_text)
+        self.assertIn("remote get-url origin", install_text)
+        self.assertIn("status --porcelain", install_text)
+        self.assertIn("invalid AEGIS_BRANCH", install_text)
         self.assertIn("python3 -m aegisagent install shim --approved", install_text)
         self.assertIn("git -C \"$INSTALL_DIR\" pull --ff-only origin \"$BRANCH\"", update_text)
+        self.assertIn("remote get-url origin", update_text)
+        self.assertIn("status --porcelain", update_text)
+        self.assertIn("invalid AEGIS_BRANCH", update_text)
         self.assertIn("python3 -m aegisagent install shim --approved", update_text)
         self.assertNotIn("open ", install_text)
         self.assertNotIn("xdg-open", install_text)
         self.assertNotIn("open ", update_text)
         self.assertNotIn("xdg-open", update_text)
+        for script in (install, update):
+            syntax = subprocess.run(["sh", "-n", str(script)], text=True, capture_output=True, check=False)
+            self.assertEqual(syntax.returncode, 0, syntax.stderr)
 
     def test_no_args_explains_terminal_activation_without_web(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -104,6 +113,9 @@ class CliTests(unittest.TestCase):
         self.assertFalse(payload["external_action_started"])
         self.assertEqual(payload["primary_command"], "aegisagent tui")
         self.assertIn("/activation", payload["tui_commands"])
+        self.assertIn("/dashboard", payload["tui_commands"])
+        self.assertIn("/install", payload["tui_commands"])
+        self.assertIn("/update", payload["tui_commands"])
 
     def test_install_status_and_shim_are_terminal_only(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -148,6 +160,40 @@ class CliTests(unittest.TestCase):
         self.assertEqual(payload["branch"], "main")
         self.assertIn("git pull --ff-only origin main", payload["git_command"])
         self.assertFalse(payload["browser_auto_launch"])
+
+    def test_update_approved_pulls_from_local_remote_and_audits(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            seed = Path(tmp) / "seed"
+            remote = Path(tmp) / "remote.git"
+            workspace = Path(tmp) / "work"
+            seed.mkdir()
+            subprocess.run(["git", "init"], cwd=seed, text=True, capture_output=True, check=True)
+            subprocess.run(["git", "checkout", "-B", "main"], cwd=seed, text=True, capture_output=True, check=True)
+            subprocess.run(["git", "config", "user.name", "Aegis Test"], cwd=seed, text=True, capture_output=True, check=True)
+            subprocess.run(["git", "config", "user.email", "aegis@example.invalid"], cwd=seed, text=True, capture_output=True, check=True)
+            (seed / "note.txt").write_text("v1\n", encoding="utf-8")
+            subprocess.run(["git", "add", "note.txt"], cwd=seed, text=True, capture_output=True, check=True)
+            subprocess.run(["git", "commit", "-m", "Initial"], cwd=seed, text=True, capture_output=True, check=True)
+            subprocess.run(["git", "init", "--bare", str(remote)], text=True, capture_output=True, check=True)
+            subprocess.run(["git", "remote", "add", "origin", str(remote)], cwd=seed, text=True, capture_output=True, check=True)
+            subprocess.run(["git", "push", "origin", "main"], cwd=seed, text=True, capture_output=True, check=True)
+            subprocess.run(["git", "clone", str(remote), str(workspace)], text=True, capture_output=True, check=True)
+            (seed / "note.txt").write_text("v2\n", encoding="utf-8")
+            subprocess.run(["git", "add", "note.txt"], cwd=seed, text=True, capture_output=True, check=True)
+            subprocess.run(["git", "commit", "-m", "Update"], cwd=seed, text=True, capture_output=True, check=True)
+            subprocess.run(["git", "push", "origin", "main"], cwd=seed, text=True, capture_output=True, check=True)
+
+            updated = run_cli("--json", "update", "--remote", "origin", "--branch", "main", "--approved", cwd=str(workspace))
+
+            self.assertEqual(updated.returncode, 0, updated.stderr)
+            payload = json.loads(updated.stdout)
+            self.assertEqual(payload["status"], "ok")
+            self.assertEqual((workspace / "note.txt").read_text(encoding="utf-8"), "v2\n")
+            audit = (workspace / ".aegisagent" / "audit.jsonl").read_text(encoding="utf-8")
+            self.assertIn("lifecycle.update", audit)
+            self.assertIn('"workspace_mutation_performed": true', audit)
+            self.assertIn('"external_action_started": true', audit)
+            self.assertIn('"browser_auto_launch": false', audit)
 
     def test_setup_health_audit(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -197,6 +243,10 @@ class CliTests(unittest.TestCase):
             blocked = run_cli("verify", "node", "test.js", cwd=tmp)
             self.assertEqual(blocked.returncode, 1)
             self.assertEqual(json.loads(blocked.stdout)["error"], "test commands must be allowlisted Python unittest/py_compile commands inside the workspace")
+
+            external = run_cli("verify", "python3", "-m", "unittest", "discover", "-s", "/tmp", cwd=tmp)
+            self.assertEqual(external.returncode, 1)
+            self.assertEqual(json.loads(external.stdout)["error"], "test commands must be allowlisted Python unittest/py_compile commands inside the workspace")
 
     def test_fetch_is_approval_gated_typed_network_tool(self):
         seen = {"count": 0}

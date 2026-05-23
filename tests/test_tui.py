@@ -3,6 +3,7 @@ import tempfile
 import contextlib
 import io
 import json
+import os
 from http.server import BaseHTTPRequestHandler, HTTPServer
 import subprocess
 import threading
@@ -13,7 +14,7 @@ from aegisagent.config import runtime_paths
 from aegisagent.core.setup_state import setup_wizard_preferences
 from aegisagent.core.subagents import BackgroundJobStore
 from aegisagent.core.tasks import TaskRunner, TaskStore
-from aegisagent.tui.interactive import _CursesAegisAgent, build_interactive_panels, dispatch_interactive_command, normalize_interactive_command, slash_palette_candidates
+from aegisagent.tui.interactive import SLASH_COMMANDS, _CursesAegisAgent, build_interactive_panels, dispatch_interactive_command, normalize_interactive_command, slash_palette_candidates
 from aegisagent.tui.renderer import TuiState, render
 
 
@@ -123,6 +124,7 @@ class TuiRendererTests(unittest.TestCase):
 
     def test_slash_palette_and_normalization(self):
         self.assertEqual(normalize_interactive_command("//setup"), "/setup")
+        self.assertEqual(len([command for command, _detail in SLASH_COMMANDS]), len({command for command, _detail in SLASH_COMMANDS}))
         matches = slash_palette_candidates("/se")
         self.assertTrue(any(command == "/setup" for command, _detail in matches))
         git_matches = slash_palette_candidates("/git")
@@ -951,6 +953,74 @@ class TuiRendererTests(unittest.TestCase):
             self.assertIn("needs_approval", update_output.getvalue())
             self.assertIn("origin", update_output.getvalue())
             self.assertIn("main", update_output.getvalue())
+
+    def test_lifecycle_slash_commands_require_exact_token(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = runtime_paths(tmp)
+            for raw_command in ("/updatex | approve", "/installx | approve", "/dashboardx", "/activationx"):
+                output = io.StringIO()
+                with contextlib.redirect_stdout(output):
+                    result = dispatch_interactive_command(raw_command, paths)
+
+                self.assertEqual(result, "agent turn")
+                self.assertNotIn("AEGIS TERMINAL UPDATE", output.getvalue())
+                self.assertNotIn("AEGIS TERMINAL INSTALL", output.getvalue())
+                self.assertNotIn("AEGIS TERMINAL DASHBOARD", output.getvalue())
+                self.assertNotIn("AEGIS TERMINAL ACTIVATION", output.getvalue())
+
+    def test_interactive_dispatch_install_shim_approved_uses_home(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = runtime_paths(tmp)
+            home = Path(tmp) / "home"
+            with patch.dict(os.environ, {"HOME": str(home)}):
+                output = io.StringIO()
+                with contextlib.redirect_stdout(output):
+                    result = dispatch_interactive_command("/install shim aegis-test | approve", paths)
+
+            shim = home / ".local" / "bin" / "aegis-test"
+            self.assertEqual(result, "install")
+            self.assertTrue(shim.exists())
+            self.assertIn("-m aegisagent", shim.read_text(encoding="utf-8"))
+            self.assertIn("audit receipt:", output.getvalue())
+            audit = (paths.state_dir / "audit.jsonl").read_text(encoding="utf-8")
+            self.assertIn("lifecycle.install", audit)
+            self.assertIn('"host_filesystem_mutation_performed": true', audit)
+            self.assertIn('"browser_auto_launch": false', audit)
+
+    def test_interactive_dispatch_update_approved_audits_external_action(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            seed = Path(tmp) / "seed"
+            remote = Path(tmp) / "remote.git"
+            workspace = Path(tmp) / "work"
+            seed.mkdir()
+            subprocess.run(["git", "init"], cwd=seed, text=True, capture_output=True, check=True)
+            subprocess.run(["git", "checkout", "-B", "main"], cwd=seed, text=True, capture_output=True, check=True)
+            subprocess.run(["git", "config", "user.name", "Aegis Test"], cwd=seed, text=True, capture_output=True, check=True)
+            subprocess.run(["git", "config", "user.email", "aegis@example.invalid"], cwd=seed, text=True, capture_output=True, check=True)
+            (seed / "note.txt").write_text("v1\n", encoding="utf-8")
+            subprocess.run(["git", "add", "note.txt"], cwd=seed, text=True, capture_output=True, check=True)
+            subprocess.run(["git", "commit", "-m", "Initial"], cwd=seed, text=True, capture_output=True, check=True)
+            subprocess.run(["git", "init", "--bare", str(remote)], text=True, capture_output=True, check=True)
+            subprocess.run(["git", "remote", "add", "origin", str(remote)], cwd=seed, text=True, capture_output=True, check=True)
+            subprocess.run(["git", "push", "origin", "main"], cwd=seed, text=True, capture_output=True, check=True)
+            subprocess.run(["git", "clone", str(remote), str(workspace)], text=True, capture_output=True, check=True)
+            paths = runtime_paths(workspace)
+            (seed / "note.txt").write_text("v2\n", encoding="utf-8")
+            subprocess.run(["git", "add", "note.txt"], cwd=seed, text=True, capture_output=True, check=True)
+            subprocess.run(["git", "commit", "-m", "Update"], cwd=seed, text=True, capture_output=True, check=True)
+            subprocess.run(["git", "push", "origin", "main"], cwd=seed, text=True, capture_output=True, check=True)
+
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                result = dispatch_interactive_command("/update origin main | approve", paths)
+
+            self.assertEqual(result, "update")
+            self.assertEqual((workspace / "note.txt").read_text(encoding="utf-8"), "v2\n")
+            audit = (paths.state_dir / "audit.jsonl").read_text(encoding="utf-8")
+            self.assertIn("lifecycle.update", audit)
+            self.assertIn('"workspace_mutation_performed": true', audit)
+            self.assertIn('"external_action_started": true', audit)
+            self.assertIn('"browser_auto_launch": false', audit)
 
     def test_interactive_dispatch_automations_surface(self):
         with tempfile.TemporaryDirectory() as tmp:

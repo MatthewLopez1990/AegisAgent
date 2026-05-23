@@ -409,7 +409,7 @@ def main(argv: list[str] | None = None) -> int:
                 "tool": result.name,
                 "status": result.status,
                 "metadata": result.metadata,
-                "external_action_started": False,
+                "external_action_started": result.metadata.get("external_action_started", False),
                 "browser_auto_launch": False,
             },
         )
@@ -476,7 +476,7 @@ def main(argv: list[str] | None = None) -> int:
                 "tool": result.name,
                 "status": result.status,
                 "metadata": result.metadata,
-                "external_action_started": False,
+                "external_action_started": result.metadata.get("external_action_started", False),
                 "browser_auto_launch": False,
             },
         )

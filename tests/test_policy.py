@@ -24,6 +24,18 @@ class PolicyTests(unittest.TestCase):
         self.assertTrue(classification.requires_approval)
         self.assertEqual(classification.tool, "git")
 
+    def test_git_network_and_mutations_require_approval(self):
+        for command in ("git pull origin main", "git fetch origin main", "git add README.md", "git branch feature/aegis"):
+            classification = classify_shell_command(command)
+            self.assertTrue(classification.requires_approval, command)
+            self.assertEqual(classification.tool, "git")
+
+    def test_git_read_only_commands_are_allowed(self):
+        for command in ("git status", "git diff", "git remote -v", "git branch --list"):
+            classification = classify_shell_command(command)
+            self.assertFalse(classification.requires_approval, command)
+            self.assertEqual(classification.risk, "low")
+
 
 if __name__ == "__main__":
     unittest.main()

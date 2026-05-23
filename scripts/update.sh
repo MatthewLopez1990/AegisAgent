@@ -5,10 +5,34 @@ BRANCH="${AEGIS_BRANCH:-main}"
 INSTALL_DIR="${AEGIS_INSTALL_DIR:-$HOME/.aegis-agent}"
 BIN_DIR="${AEGIS_BIN_DIR:-$HOME/.local/bin}"
 COMMAND_NAME="${AEGIS_COMMAND_NAME:-aegis}"
+REPO_URL="${AEGIS_REPO_URL:-https://github.com/MatthewLopez1990/AegisAgent.git}"
+
+validate_branch() {
+  case "$BRANCH" in
+    ""|-*|*..*|*\\*|*~*|*^*|*:*|*[\ \	]*)
+      echo "invalid AEGIS_BRANCH: $BRANCH" >&2
+      exit 1
+      ;;
+  esac
+}
 
 if [ ! -d "$INSTALL_DIR/.git" ]; then
   echo "AegisAgent checkout not found at $INSTALL_DIR" >&2
   echo "Install first with scripts/install.sh or the README one-line installer." >&2
+  exit 1
+fi
+
+validate_branch
+
+current_url="$(git -C "$INSTALL_DIR" remote get-url origin 2>/dev/null || true)"
+if [ "$current_url" != "$REPO_URL" ]; then
+  echo "refusing to update $INSTALL_DIR because origin is not $REPO_URL" >&2
+  echo "current origin: ${current_url:-missing}" >&2
+  exit 1
+fi
+
+if [ -n "$(git -C "$INSTALL_DIR" status --porcelain)" ]; then
+  echo "refusing to update dirty checkout at $INSTALL_DIR" >&2
   exit 1
 fi
 

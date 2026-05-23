@@ -4,12 +4,14 @@ import re
 from dataclasses import dataclass
 
 SECRET_PATTERNS = [
-    re.compile(r"(?i)(api[_-]?key|token|secret|password|passwd|bearer)\s*[:=]\s*([^\s,;]+)"),
+    re.compile(r"(?i)(api[_-]?key|token|secret|password|passwd|bearer|authorization)\s*[:=]\s*(bearer\s+)?([^\s,;]+)"),
     re.compile(r"sk-[A-Za-z0-9_-]{20,}"),
     re.compile(r"xox[baprs]-[A-Za-z0-9-]{20,}"),
     re.compile(r"gh[pousr]_[A-Za-z0-9_]{20,}"),
     re.compile(r"AKIA[0-9A-Z]{16}"),
 ]
+
+SECRET_KEY_MARKERS = ("secret", "token", "password", "passwd", "api_key", "apikey", "api-key", "bearer", "authorization")
 
 
 @dataclass(frozen=True)
@@ -26,7 +28,7 @@ def redact_text(value: str) -> RedactionResult:
         def replace(match: re.Match[str]) -> str:
             nonlocal count
             count += 1
-            if match.lastindex and match.lastindex >= 2:
+            if match.lastindex and match.lastindex >= 3:
                 return f"{match.group(1)}=[REDACTED]"
             return "[REDACTED]"
 
@@ -41,8 +43,10 @@ def redact_mapping(payload: dict) -> tuple[dict, bool]:
         if isinstance(value, str):
             result = redact_text(value)
             clean[key] = result.text
-            redacted = redacted or result.redacted or "secret" in key.lower() or "token" in key.lower()
-            if "secret" in key.lower() or "token" in key.lower() or "password" in key.lower():
+            lower_key = key.lower()
+            key_is_secret = any(marker in lower_key for marker in SECRET_KEY_MARKERS)
+            redacted = redacted or result.redacted or key_is_secret
+            if key_is_secret:
                 clean[key] = "[REDACTED]"
         elif isinstance(value, dict):
             clean[key], child_redacted = redact_mapping(value)

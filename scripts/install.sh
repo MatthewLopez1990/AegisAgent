@@ -14,12 +14,40 @@ need_command() {
   fi
 }
 
+validate_branch() {
+  case "$BRANCH" in
+    ""|-*|*..*|*\\*|*~*|*^*|*:*|*[\ \	]*)
+      echo "invalid AEGIS_BRANCH: $BRANCH" >&2
+      exit 1
+      ;;
+  esac
+}
+
+verify_origin() {
+  current_url="$(git -C "$INSTALL_DIR" remote get-url origin 2>/dev/null || true)"
+  if [ "$current_url" != "$REPO_URL" ]; then
+    echo "refusing to update $INSTALL_DIR because origin is not $REPO_URL" >&2
+    echo "current origin: ${current_url:-missing}" >&2
+    exit 1
+  fi
+}
+
+require_clean_checkout() {
+  if [ -n "$(git -C "$INSTALL_DIR" status --porcelain)" ]; then
+    echo "refusing to update dirty checkout at $INSTALL_DIR" >&2
+    exit 1
+  fi
+}
+
 need_command git
 need_command python3
+validate_branch
 
 mkdir -p "$BIN_DIR"
 
 if [ -d "$INSTALL_DIR/.git" ]; then
+  verify_origin
+  require_clean_checkout
   git -C "$INSTALL_DIR" fetch origin "$BRANCH"
   git -C "$INSTALL_DIR" checkout "$BRANCH"
   git -C "$INSTALL_DIR" pull --ff-only origin "$BRANCH"

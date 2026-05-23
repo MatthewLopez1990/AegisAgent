@@ -842,6 +842,8 @@ def _allowed_test_argv(command: str, workspace: Path) -> list[str]:
     if not argv or any(token in {";", "&&", "||", "|", ">", ">>", "<"} for token in argv):
         return []
     if len(argv) >= 3 and argv[0] in {"python", "python3"} and argv[1] == "-m" and argv[2] == "unittest":
+        if not _unittest_args_stay_in_workspace(argv[3:], workspace):
+            return []
         return argv
     if len(argv) >= 4 and argv[0] in {"python", "python3"} and argv[1] == "-m" and argv[2] == "py_compile":
         for raw_path in argv[3:]:
@@ -856,6 +858,37 @@ def _allowed_test_argv(command: str, workspace: Path) -> list[str]:
                 return []
         return argv
     return []
+
+
+def _unittest_args_stay_in_workspace(args: list[str], workspace: Path) -> bool:
+    expect_path = False
+    for token in args:
+        if expect_path:
+            if not _test_path_stays_in_workspace(token, workspace):
+                return False
+            expect_path = False
+            continue
+        if token in {"-s", "--start-directory", "-t", "--top-level-directory"}:
+            expect_path = True
+            continue
+        if token.startswith("--start-directory=") or token.startswith("--top-level-directory="):
+            raw_path = token.split("=", 1)[1]
+            if not _test_path_stays_in_workspace(raw_path, workspace):
+                return False
+            continue
+        if token.endswith(".py") or "/" in token or token.startswith("."):
+            if not _test_path_stays_in_workspace(token, workspace):
+                return False
+    return not expect_path
+
+
+def _test_path_stays_in_workspace(raw_path: str, workspace: Path) -> bool:
+    target = (workspace / raw_path).resolve()
+    try:
+        rel = target.relative_to(workspace)
+    except ValueError:
+        return False
+    return not (rel.parts and rel.parts[0] in SKIPPED_DIRS)
 
 
 def _valid_branch_name(branch_name: str) -> bool:
