@@ -21,7 +21,7 @@ from aegisagent.core.improvement import ImprovementStore, format_candidate, form
 from aegisagent.core.lifecycle import format_install_status, format_update_status, install_status_payload, install_terminal_shim, update_from_github
 from aegisagent.core.memory import MemoryStore, memory_files
 from aegisagent.core.provider_config import ProviderStore, ProviderUsageStore
-from aegisagent.core.setup_flow import SETUP_SECTIONS, SetupGuide, format_setup_next, format_setup_quickstart, format_setup_section
+from aegisagent.core.setup_flow import SETUP_SECTIONS, SetupGuide, format_setup_next, format_setup_quickstart, format_setup_section, terminal_command_name
 from aegisagent.core.sessions import SessionStore
 from aegisagent.core.skills import SkillLoader
 from aegisagent.core.subagents import (
@@ -231,13 +231,20 @@ def build_parser() -> argparse.ArgumentParser:
     tui.add_argument("--width", type=int, default=None)
     tui.add_argument("--height", type=int, default=None)
 
-    gateway = sub.add_parser("gateway", help="Start FastAPI/WebSocket gateway.")
+    gateway = sub.add_parser(
+        "gateway",
+        help="Advanced: start the optional local gateway after approval; does not open a browser.",
+        description="Advanced: start the optional local gateway after approval; does not open a browser.",
+    )
     gateway.add_argument("--host", default="127.0.0.1")
     gateway.add_argument("--port", type=int, default=8787)
+    gateway.add_argument("--approved", action="store_true", help="Allow the optional local gateway server to start.")
 
-    web = sub.add_parser("web", help="Start gateway and report web GUI command.")
+    web = sub.add_parser("web", help="Print optional web console instructions. Serving requires --serve --approved.")
     web.add_argument("--host", default="127.0.0.1")
     web.add_argument("--port", type=int, default=8787)
+    web.add_argument("--serve", action="store_true", help="Start the optional local gateway after approval.")
+    web.add_argument("--approved", action="store_true", help="Allow the optional gateway server to start.")
     return parser
 
 
@@ -922,12 +929,64 @@ def main(argv: list[str] | None = None) -> int:
         return run_textual_app(args.view, paths=paths, classic=args.classic)
 
     if args.command == "gateway":
+        if not args.approved:
+            print("AEGIS OPTIONAL GATEWAY")
+            print("status      needs_approval")
+            print(f"command     {terminal_command_name()} gateway --approved --host {args.host} --port {args.port}")
+            print("browser_auto_launch: false")
+            print("gateway_started: false")
+            print("next        rerun with --approved to start the optional local gateway")
+            return 1
+        print(f"Starting optional AegisAgent gateway on http://{args.host}:{args.port}")
+        print("browser_auto_launch: false")
         return run_gateway(args.host, args.port, str(paths.workspace))
 
     if args.command == "web":
-        if paths.web_dir.exists():
-            print(f"Web GUI source: {paths.web_dir}")
-            print(f"Run in another shell: cd {paths.web_dir} && npm install && npm run dev")
+        command = terminal_command_name()
+        payload = {
+            "title": "AEGIS OPTIONAL WEB CONSOLE",
+            "status": "serve_approved" if args.serve and args.approved else "needs_approval" if args.serve else "preview",
+            "workspace": str(paths.workspace),
+            "web_source": str(paths.web_dir),
+            "terminal_first": True,
+            "browser_required": False,
+            "browser_auto_launch": False,
+            "gateway_started": False,
+            "external_action_started": False,
+            "serve_command": f"{command} web --serve --approved --host {args.host} --port {args.port}",
+            "dev_command": f"cd {paths.web_dir} && npm install && npm run dev -- --port 5173",
+            "terminal_command": f"{command} tui",
+        }
+        if not args.serve:
+            if args.json:
+                print(json.dumps(payload, indent=2))
+            else:
+                print(str(payload["title"]))
+                print(f"status      {payload['status']}")
+                print(f"workspace   {payload['workspace']}")
+                print(f"web source  {payload['web_source']}")
+                print(f"serve       {payload['serve_command']}")
+                print(f"dev ui      {payload['dev_command']}")
+                print(f"terminal    {payload['terminal_command']}")
+                print("browser_auto_launch: false")
+                print("gateway_started: false")
+                print("external_action_started: false")
+                print("note        preview only; no server or browser was started")
+            return 0
+        if not args.approved:
+            if args.json:
+                print(json.dumps(payload, indent=2))
+            else:
+                print(str(payload["title"]))
+                print("status      needs_approval")
+                print(f"serve       {payload['serve_command']}")
+                print("browser_auto_launch: false")
+                print("gateway_started: false")
+                print("external_action_started: false")
+                print("next        rerun with --serve --approved to start the optional local gateway")
+            return 1
+        print(f"Starting optional AegisAgent gateway on http://{args.host}:{args.port}")
+        print("browser_auto_launch: false")
         return run_gateway(args.host, args.port, str(paths.workspace))
 
     return 0

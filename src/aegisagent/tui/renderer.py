@@ -11,7 +11,7 @@ from aegisagent.tui.theme import FOOTER_KEYS
 @dataclass(frozen=True)
 class TuiState:
     view: str = "command"
-    composer: str = "/approve edit once --scope tui"
+    composer: str = "/setup next"
     session: str = "main"
     branch: str = "main"
     model: str = "local/terminal-v0"
@@ -84,20 +84,19 @@ def render_command(state: TuiState, width: int, height: int) -> str:
         status = "policy:on net:ask audit:live"
     left = [
         _panel_rule(left_width),
-        _panel_line(_row(f"session: {state.session} / branch: {state.branch}", "streaming", max(1, left_width - 4)), left_width),
+        _panel_line(_row(f"session: {state.session} / branch: {state.branch}", "idle", max(1, left_width - 4)), left_width),
         _panel_rule(left_width),
-        _panel_line("you   keep Aegis terminal-first and verify startup stays browser-off.", left_width),
-        _panel_line("aegis I will inspect, ask before writes/network, and record receipts.", left_width),
+        _panel_line("Aegis is active in this terminal.", left_width),
+        _panel_line("No command has run in this frame.", left_width),
         _blank_panel(left_width),
-        _panel_line("tool: rg --files                                      allowed / read-only", left_width),
-        _panel_line("scope=workspace  risk=low  policy=auto  audit=8f31c2", left_width),
-        _panel_line("src/aegisagent/tui/renderer.py  tests/test_tui.py  docs/progress/", left_width),
+        _panel_line("Start: /setup next | /activation | /help", left_width),
+        _panel_line("Verify: /setup run-checks | /audit | /dashboard", left_width),
+        _panel_line("Work: type a request, or use /commands for slash lanes.", left_width),
         _blank_panel(left_width),
-        _panel_line("approval required: edit file                                  ask", left_width),
-        _panel_line("target=src/aegisagent/tui/renderer.py", left_width),
-        _panel_line("[a] allow once   [s] scope down   [d] deny", left_width),
+        _panel_line("Security: writes and network ask first.", left_width),
+        _panel_line("Receipts appear after real actions. Secrets stay redacted.", left_width),
         _blank_panel(left_width),
-        _panel_line("system checkpoint saved. rollback available. secrets redacted.", left_width),
+        _panel_line("Optional web is preview-only until explicitly approved.", left_width),
     ]
     header = [
         _row("AEGIS SHIELD prompt-first governed agent", status, width),
@@ -128,7 +127,7 @@ def _posture_panel(width: int, height: int) -> list[str]:
         _panel_rule(width),
         _panel_line(_row("security posture", "low risk", max(1, width - 4)), width),
         _panel_rule(width),
-        _panel_line("model      local/terminal-v0 ready", width),
+        _panel_line("provider   local fallback; run /model doctor", width),
         _blank_panel(width),
         _panel_line("tools      shell, git, files gated", width),
         _blank_panel(width),
@@ -138,13 +137,12 @@ def _posture_panel(width: int, height: int) -> list[str]:
         _blank_panel(width),
         _panel_line("network    disabled until approved", width),
         _blank_panel(width),
-        _panel_line("secrets    vault locked / no echo", width),
+        _panel_line("secrets    handles only / no raw echo", width),
         _blank_panel(width),
-        _panel_line("audit      append-only chain ok", width),
+        _panel_line("audit      run /audit for chain status", width),
         _blank_panel(width),
-        _panel_line("pending approval", width),
-        _panel_line("write", width),
-        _panel_line("press a, s, or d", width),
+        _panel_line("approval   none pending", width),
+        _panel_line("next       /setup next", width),
     ]
     rows.extend([_blank_panel(width)] * max(0, height - len(rows)))
     return rows[:height]
@@ -155,26 +153,25 @@ def render_activation(width: int, height: int) -> str:
         _row("AEGIS TERMINAL ACTIVATION", "terminal-first browser-off", width),
         _line(width),
         _panel_rule(width),
-        _panel_line("primary     aegis tui", width),
-        _panel_line("alias       aegis tui", width),
-        _panel_line("source      PYTHONPATH=src python3 -m aegisagent", width),
-        _panel_line("default     aegis -> terminal TUI", width),
-        _panel_line("fallback    aegis tui --print", width),
+        _panel_line("installed command   aegis tui", width),
+        _panel_line("from source         PYTHONPATH=src python3 -m aegisagent tui", width),
+        _panel_line("print-only preview  aegis tui --print", width),
+        _panel_line("default             aegis -> terminal TUI", width),
         _panel_rule(width),
         _blank_panel(width),
-        _panel_line("safety      terminal_first=true  browser_required=false", width),
-        _panel_line("            browser_auto_launch=false  gateway_started=false", width),
+        _panel_line("safety              terminal_first=true  browser_required=false", width),
+        _panel_line("                    browser_auto_launch=false  gateway_started=false", width),
         _blank_panel(width),
-        _panel_line("inside TUI  /setup run-checks  /capabilities  /gaps", width),
-        _panel_line("            /tasks  /agents  /browser  /activation", width),
+        _panel_line("next                /setup next -> /setup run-checks -> type a request", width),
+        _panel_line("inside TUI          /activation  /dashboard  /tasks  /agents", width),
         _blank_panel(width),
-        _panel_line("optional    /web prints browser console instructions only", width),
+        _panel_line("optional web        /web prints instructions only; no browser auto-start", width),
     ]
     while len(rows) < height - 4:
         rows.append(_blank_panel(width))
     rows.extend([
         _line(width),
-        _row("Tab pane  Enter select  / command  ? help  q quit", f"{width}x{height} ready", width),
+        _row("Enter send | / commands | Tab complete | ? help | q quit", f"{width}x{height} ready", width),
         _line(width),
         _row("aegis> /activation", "enter to send", width),
     ])
@@ -209,7 +206,7 @@ def render_tools(width: int, height: int) -> str:
     else:
         body = matrix[:content_h]
     lines = header + body
-    lines.extend([_line(width), _row(FOOTER_KEYS, "provider connected sandbox isolated secrets locked", width), _row("aegis> /policy shell require-approval risky", "draft command", width)])
+    lines.extend([_line(width), _row(FOOTER_KEYS, "provider local fallback  sandbox gated  secrets handles-only", width), _row("aegis> /policy shell require-approval risky", "draft command", width)])
     return "\n".join(_clip(line, width) for line in lines[:height])
 
 

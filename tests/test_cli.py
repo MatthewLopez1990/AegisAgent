@@ -113,6 +113,7 @@ class CliTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("AEGIS TERMINAL ACTIVATION", result.stdout)
         self.assertIn("optional web: aegisagent web", result.stdout)
+        self.assertIn("serve web:    aegisagent web --serve --approved", result.stdout)
         self.assertIn("browser_required: false", result.stdout)
         self.assertIn("source      PYTHONPATH=src python3 -m aegisagent", result.stdout)
 
@@ -127,10 +128,91 @@ class CliTests(unittest.TestCase):
         self.assertFalse(payload["gateway_started"])
         self.assertFalse(payload["external_action_started"])
         self.assertEqual(payload["primary_command"], "aegisagent tui")
+        self.assertTrue(payload["web_gui"]["optional"])
+        self.assertEqual(payload["web_gui"]["command"], "aegisagent web")
+        self.assertEqual(payload["web_gui"]["serve_command"], "aegisagent web --serve --approved")
+        self.assertFalse(payload["web_gui"]["opens_browser"])
+        self.assertFalse(payload["web_gui"]["gateway_starts_by_default"])
         self.assertIn("/activation", payload["tui_commands"])
         self.assertIn("/dashboard", payload["tui_commands"])
         self.assertIn("/install", payload["tui_commands"])
         self.assertIn("/update", payload["tui_commands"])
+
+    def test_web_command_is_preview_only_until_serve_is_approved(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            preview = io.StringIO()
+            with patch("aegisagent.cli.run_gateway") as run_gateway:
+                with contextlib.redirect_stdout(preview):
+                    result = cli.main(["--workspace", tmp, "web"])
+
+            self.assertEqual(result, 0)
+            run_gateway.assert_not_called()
+            self.assertIn("AEGIS OPTIONAL WEB CONSOLE", preview.getvalue())
+            self.assertIn("status      preview", preview.getvalue())
+            self.assertIn("aegis web --serve --approved", preview.getvalue())
+            self.assertIn("terminal    aegis tui", preview.getvalue())
+            self.assertIn("browser_auto_launch: false", preview.getvalue())
+            self.assertIn("gateway_started: false", preview.getvalue())
+
+            needs_approval = io.StringIO()
+            with patch("aegisagent.cli.run_gateway") as run_gateway:
+                with contextlib.redirect_stdout(needs_approval):
+                    result = cli.main(["--workspace", tmp, "web", "--serve"])
+
+            self.assertEqual(result, 1)
+            run_gateway.assert_not_called()
+            self.assertIn("status      needs_approval", needs_approval.getvalue())
+            self.assertIn("gateway_started: false", needs_approval.getvalue())
+
+            approved = io.StringIO()
+            with patch("aegisagent.cli.run_gateway", return_value=0) as run_gateway:
+                with contextlib.redirect_stdout(approved):
+                    result = cli.main(["--workspace", tmp, "web", "--serve", "--approved", "--host", "127.0.0.1", "--port", "8799"])
+
+            self.assertEqual(result, 0)
+            run_gateway.assert_called_once()
+            self.assertEqual(run_gateway.call_args.args[:2], ("127.0.0.1", 8799))
+            self.assertEqual(Path(run_gateway.call_args.args[2]).resolve(), Path(tmp).resolve())
+            self.assertIn("Starting optional AegisAgent gateway", approved.getvalue())
+            self.assertIn("browser_auto_launch: false", approved.getvalue())
+
+    def test_gateway_command_requires_approval_and_does_not_open_browser(self):
+        help_result = subprocess.run(
+            [sys.executable, "-m", "aegisagent", "gateway", "--help"],
+            text=True,
+            capture_output=True,
+            check=False,
+            env={"PYTHONPATH": "src"},
+        )
+        self.assertEqual(help_result.returncode, 0, help_result.stderr)
+        self.assertIn("optional local gateway", help_result.stdout)
+        self.assertIn("does not open", help_result.stdout)
+        self.assertIn("browser", help_result.stdout)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            preview = io.StringIO()
+            with patch("aegisagent.cli.run_gateway") as run_gateway:
+                with contextlib.redirect_stdout(preview):
+                    result = cli.main(["--workspace", tmp, "gateway"])
+
+            self.assertEqual(result, 1)
+            run_gateway.assert_not_called()
+            self.assertIn("AEGIS OPTIONAL GATEWAY", preview.getvalue())
+            self.assertIn("status      needs_approval", preview.getvalue())
+            self.assertIn("browser_auto_launch: false", preview.getvalue())
+            self.assertIn("gateway_started: false", preview.getvalue())
+
+            approved = io.StringIO()
+            with patch("aegisagent.cli.run_gateway", return_value=0) as run_gateway:
+                with contextlib.redirect_stdout(approved):
+                    result = cli.main(["--workspace", tmp, "gateway", "--approved", "--host", "127.0.0.1", "--port", "8798"])
+
+            self.assertEqual(result, 0)
+            run_gateway.assert_called_once()
+            self.assertEqual(run_gateway.call_args.args[:2], ("127.0.0.1", 8798))
+            self.assertEqual(Path(run_gateway.call_args.args[2]).resolve(), Path(tmp).resolve())
+            self.assertIn("Starting optional AegisAgent gateway", approved.getvalue())
+            self.assertIn("browser_auto_launch: false", approved.getvalue())
 
     def test_installed_shim_name_drives_activation_card(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -140,6 +222,8 @@ class CliTests(unittest.TestCase):
         self.assertIn("primary     aegis-test tui", result.stdout)
         self.assertIn("default     aegis-test -> terminal TUI", result.stdout)
         self.assertIn("fallback    aegis-test tui --print", result.stdout)
+        self.assertIn("optional web: aegis-test web", result.stdout)
+        self.assertIn("serve web:    aegis-test web --serve --approved", result.stdout)
 
     def test_setup_quickstart_uses_installed_command_name(self):
         with tempfile.TemporaryDirectory() as tmp:

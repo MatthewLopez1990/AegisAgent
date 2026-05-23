@@ -25,9 +25,11 @@ def terminal_activation_payload(paths: RuntimePaths) -> dict[str, Any]:
         "external_action_started": False,
         "web_gui": {
             "optional": True,
-            "command": "aegisagent web",
+            "command": f"{command_name} web",
+            "serve_command": f"{command_name} web --serve --approved",
             "opens_browser": False,
-            "note": "Use only when you explicitly want the secondary browser console.",
+            "gateway_starts_by_default": False,
+            "note": "Use only when you explicitly want optional web instructions; serving requires --serve --approved.",
         },
         "tui_commands": [
             "/setup run-checks",
@@ -72,5 +74,11 @@ def format_terminal_activation(payload: dict[str, Any]) -> str:
     lines.extend(f"- {command}" for command in payload["tui_commands"])
     lines.extend(["", "next"])
     lines.extend(f"- {item}" for item in payload["next"])
-    lines.extend(["", f"optional web: {payload['web_gui']['command']} ({payload['web_gui']['note']})"])
+    lines.extend(
+        [
+            "",
+            f"optional web: {payload['web_gui']['command']} ({payload['web_gui']['note']})",
+            f"serve web:    {payload['web_gui']['serve_command']} (starts the local gateway only after approval; it still does not open a browser.)",
+        ]
+    )
     return "\n".join(lines)

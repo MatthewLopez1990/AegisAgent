@@ -28,15 +28,21 @@ class TuiRendererTests(unittest.TestCase):
         self.assertIn("AEGIS SHIELD", output)
         self.assertIn("aegis>", output)
         self.assertIn("security posture", output)
-        self.assertIn("model      local/terminal-v0 ready", output)
+        self.assertIn("Aegis is active in this terminal.", output)
+        self.assertIn("No command has run in this frame.", output)
+        self.assertIn("provider   local fallback", output)
+        self.assertIn("approval   none pending", output)
+        self.assertIn("Enter send | / commands | Tab complete", output)
         self.assertIn("120x40 ready", output)
         self.assertNotIn("openai/gpt-5.5 verified", output)
+        self.assertNotIn("audit=8f31c2", output)
 
     def test_activation_view_and_command_are_browser_off(self):
         output = render(TuiState(view="activation"), width=100, height=32)
         self.assertIn("AEGIS TERMINAL ACTIVATION", output)
         self.assertIn("aegis tui", output)
         self.assertIn("browser_auto_launch=false", output)
+        self.assertIn("gateway_started=false", output)
         self.assertIn("/activation", output)
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -47,6 +53,7 @@ class TuiRendererTests(unittest.TestCase):
         self.assertEqual(result, "activation")
         self.assertIn("AEGIS TERMINAL ACTIVATION", printed.getvalue())
         self.assertIn("browser_auto_launch: false", printed.getvalue())
+        self.assertIn("gateway_started: false", printed.getvalue())
 
     def test_setup_and_tools_views_fit_reference_sizes(self):
         for view, width, height, marker in [
@@ -571,6 +578,19 @@ class TuiRendererTests(unittest.TestCase):
             self.assertIn('"browser_auto_launch": false', audit)
 
     def test_interactive_dispatch_web_fetch_requires_approval(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                result = dispatch_interactive_command("/web", runtime_paths(tmp))
+
+            self.assertEqual(result, "web")
+            self.assertIn("Optional web console preview", output.getvalue())
+            self.assertIn("aegis web --serve --approved", output.getvalue())
+            self.assertIn("Terminal-first path remains:", output.getvalue())
+            self.assertIn("aegis tui", output.getvalue())
+            self.assertIn("browser_auto_launch: false", output.getvalue())
+            self.assertIn("gateway_started: false", output.getvalue())
+
         seen = {"count": 0}
 
         class Handler(BaseHTTPRequestHandler):

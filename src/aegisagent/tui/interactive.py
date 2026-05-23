@@ -1649,10 +1649,15 @@ def dispatch_interactive_command(command: str, paths: RuntimePaths) -> str:
             print(f"audit receipt: {receipt['id']}")
         return "web fetch"
     if command.startswith("/web"):
-        print("Optional browser GUI:")
+        command_name = terminal_command_name()
+        print("Optional web console preview:")
+        print(f"  {command_name} web")
+        print(f"  {command_name} web --serve --approved --host 127.0.0.1 --port 8787")
         print("  cd web && npm install && npm run dev -- --port 5173")
+        print("browser_auto_launch: false")
+        print("gateway_started: false")
         print("Terminal-first path remains:")
-        print("  PYTHONPATH=src python3 -m aegisagent tui")
+        print(f"  {command_name} tui")
         return "web"
     if command.startswith("/policy shell"):
         action = command.removeprefix("/policy shell").strip() or "rg --files"

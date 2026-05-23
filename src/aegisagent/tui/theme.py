@@ -14,4 +14,4 @@ TOKENS = {
     "red": "#ff626b",
 }
 
-FOOTER_KEYS = "Tab pane  Enter select  / command  ? help  q quit"
+FOOTER_KEYS = "Enter send | / commands | Tab complete | ? help | q quit"

@@ -188,7 +188,8 @@ Start it only when you explicitly want the browser UI:
 
 ```bash
 python3 -m pip install -e '.[gateway]'
-aegisagent gateway --host 127.0.0.1 --port 8787
+aegis web
+aegis web --serve --approved --host 127.0.0.1 --port 8787
 ```
 
 In another terminal:
@@ -198,6 +199,8 @@ cd web
 npm install
 npm run dev -- --port 5173
 ```
+
+`aegis web` is preview-only. It prints the web commands and does not start a server or open a browser. `aegis web --serve --approved` starts the local gateway only after explicit approval; it still does not launch a browser.
 
 ## More CLI Examples
 
