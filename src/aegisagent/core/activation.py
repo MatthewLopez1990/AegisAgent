@@ -1,19 +1,23 @@
 from __future__ import annotations
 
+import os
 from typing import Any
 
 from aegisagent.config import RuntimePaths
 
 
 def terminal_activation_payload(paths: RuntimePaths) -> dict[str, Any]:
+    command_name = os.environ.get("AEGIS_COMMAND_NAME", "aegisagent").strip() or "aegisagent"
+    primary_command = f"{command_name} tui"
+    fallback = f"{command_name} tui --print"
     return {
         "title": "AEGIS TERMINAL ACTIVATION",
         "workspace": str(paths.workspace),
-        "primary_command": "aegisagent tui",
+        "primary_command": primary_command,
         "installed_alias": "aegis tui",
-        "default_entrypoint": "aegisagent",
+        "default_entrypoint": command_name,
         "module_entrypoint": "PYTHONPATH=src python3 -m aegisagent",
-        "fallback": "aegisagent tui --print",
+        "fallback": fallback,
         "terminal_first": True,
         "browser_required": False,
         "browser_auto_launch": False,
@@ -38,7 +42,7 @@ def terminal_activation_payload(paths: RuntimePaths) -> dict[str, Any]:
             "/activation",
         ],
         "next": [
-            "Run `aegisagent` or `aegisagent tui` in a real terminal.",
+            f"Run `{command_name}` or `{primary_command}` in a real terminal.",
             "Use `PYTHONPATH=src python3 -m aegisagent` from a source checkout.",
             "Use `/setup run-checks` inside the TUI for metadata-only readiness.",
             "Use `/web` only to print optional Web GUI instructions.",

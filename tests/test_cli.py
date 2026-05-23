@@ -119,6 +119,15 @@ class CliTests(unittest.TestCase):
         self.assertIn("/install", payload["tui_commands"])
         self.assertIn("/update", payload["tui_commands"])
 
+    def test_installed_shim_name_drives_activation_card(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = run_cli("activation", cwd=tmp, extra_env={"AEGIS_COMMAND_NAME": "aegis-test"})
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("primary     aegis-test tui", result.stdout)
+        self.assertIn("default     aegis-test -> terminal TUI", result.stdout)
+        self.assertIn("fallback    aegis-test tui --print", result.stdout)
+
     def test_install_status_and_shim_are_terminal_only(self):
         with tempfile.TemporaryDirectory() as tmp:
             bin_dir = Path(tmp) / "bin"
@@ -146,6 +155,7 @@ class CliTests(unittest.TestCase):
             script = shim.read_text(encoding="utf-8")
             self.assertIn(str(Path(tmp).resolve()), script)
             self.assertIn("-m aegisagent", script)
+            self.assertIn("AEGIS_COMMAND_NAME='aegis-test'", script)
             audit = (Path(tmp) / ".aegisagent" / "audit.jsonl").read_text(encoding="utf-8")
             self.assertIn("lifecycle.install", audit)
             self.assertIn('"browser_auto_launch": false', audit)

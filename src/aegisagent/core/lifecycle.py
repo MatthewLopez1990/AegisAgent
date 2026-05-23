@@ -43,7 +43,7 @@ def install_terminal_shim(paths: RuntimePaths, *, bin_dir: str = "", name: str =
         return _install_result("needs_approval", payload)
 
     target_dir.mkdir(parents=True, exist_ok=True)
-    script = _shim_script(paths)
+    script = _shim_script(paths, clean_name)
     existed = target.exists()
     target.write_text(script, encoding="utf-8")
     current_mode = target.stat().st_mode
@@ -368,13 +368,14 @@ def _target_bin_dir(raw_bin_dir: str) -> Path:
     return (Path(os.environ.get("HOME", "~")).expanduser() / ".local" / "bin").resolve()
 
 
-def _shim_script(paths: RuntimePaths) -> str:
+def _shim_script(paths: RuntimePaths, command_name: str) -> str:
     workspace = str(paths.workspace)
     return "\n".join(
         [
             "#!/usr/bin/env sh",
             "set -eu",
             f"AEGIS_WORKSPACE={_shell_quote(workspace)}",
+            f"AEGIS_COMMAND_NAME={_shell_quote(command_name)}",
             'AEGIS_PYTHON="${AEGIS_PYTHON:-python3}"',
             'cd "$AEGIS_WORKSPACE"',
             'PYTHONPATH="$AEGIS_WORKSPACE/src${PYTHONPATH:+:$PYTHONPATH}" exec "$AEGIS_PYTHON" -m aegisagent "$@"',

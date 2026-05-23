@@ -35,7 +35,7 @@ class TuiRendererTests(unittest.TestCase):
     def test_activation_view_and_command_are_browser_off(self):
         output = render(TuiState(view="activation"), width=100, height=32)
         self.assertIn("AEGIS TERMINAL ACTIVATION", output)
-        self.assertIn("aegisagent tui", output)
+        self.assertIn("aegis tui", output)
         self.assertIn("browser_auto_launch=false", output)
         self.assertIn("/activation", output)
 
