@@ -1,0 +1,925 @@
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from pathlib import Path
+
+from aegisagent import __version__
+from aegisagent.config import ensure_runtime, runtime_paths
+from aegisagent.core.activation import format_terminal_activation, terminal_activation_payload
+from aegisagent.core.agent import AgentRuntime
+from aegisagent.core.automation import AutomationRegistry, automation_summary, format_automation, format_automations, format_due_automations, format_due_run, format_missed_automations, format_missed_replay, format_service_status, format_service_wrapper, format_worker_logs, format_worker_run
+from aegisagent.core.browser_sessions import BrowserSessionStore, browser_summary
+from aegisagent.core.capabilities import capability_map, format_capabilities
+from aegisagent.core.connectors import DEFAULT_CONNECTORS, ConnectorStore
+from aegisagent.core.dashboard import dashboard_payload, format_dashboard
+from aegisagent.core.executor import GovernedExecutor
+from aegisagent.core.improvement import ImprovementStore, format_candidate, format_candidate_diff_review, format_improvement, format_improvements, format_verification_run, improvement_summary
+from aegisagent.core.lifecycle import format_install_status, format_update_status, install_status_payload, install_terminal_shim, update_from_github
+from aegisagent.core.memory import MemoryStore, memory_files
+from aegisagent.core.provider_config import ProviderStore, ProviderUsageStore
+from aegisagent.core.setup_flow import SETUP_SECTIONS, SetupGuide, format_setup_quickstart, format_setup_section
+from aegisagent.core.sessions import SessionStore
+from aegisagent.core.skills import SkillLoader
+from aegisagent.core.subagents import (
+    LocalSubagentOrchestrator,
+    SubagentQueue,
+    SubagentStore,
+    agent_contracts_payload,
+    agent_status,
+    format_agent_contracts,
+    format_agent_profiles,
+    format_agent_status,
+    format_background_job,
+    format_background_jobs,
+    format_event_line,
+)
+from aegisagent.core.tasks import TaskRunner, format_task_outputs, format_task_worker_logs
+from aegisagent.core.tools import ToolRegistry, enabled_counts
+from aegisagent.core.web_tools import WebToolRunner
+from aegisagent.core.workspace_tools import WorkspaceToolRunner
+from aegisagent.gateway import run_gateway
+from aegisagent.security.audit import AuditLog
+from aegisagent.security.policy import decide_tool
+from aegisagent.security.sandbox import detect_sandbox
+from aegisagent.tui.renderer import TuiState, render
+from aegisagent.tui.textual_app import run_textual_app
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="aegisagent", description="Security-first autonomous agent console.")
+    parser.add_argument("--workspace", default=None, help="Workspace root. Defaults to current directory.")
+    parser.add_argument("--json", action="store_true", help="Emit JSON where supported.")
+    sub = parser.add_subparsers(dest="command")
+    sub.add_parser("activate", help="Launch the terminal-first AegisAgent TUI, or print activation instructions outside a TTY.")
+    sub.add_parser("activation", help="Print terminal activation and browser-off readiness details.")
+
+    setup = sub.add_parser("setup", help="Create local runtime files and show secure setup flow.")
+    setup.add_argument("section", nargs="?", choices=SETUP_SECTIONS, help="Show one setup section.")
+    setup.add_argument("--quick", action="store_true", help="Print the compact setup quickstart.")
+    setup.add_argument("--full", action="store_true", help="Emit the full setup quickstart payload as JSON.")
+    setup.add_argument("--run-checks", action="store_true")
+    capabilities = sub.add_parser("capabilities", help="Show terminal-visible Hermes-class capability parity map.")
+    capabilities.add_argument("--gaps", action="store_true", help="Show only partial, metadata-ready, and planned capabilities.")
+    sub.add_parser("dashboard", help="Show a terminal-first operator dashboard without starting web or browser surfaces.")
+    install = sub.add_parser("install", help="Show or install macOS/Linux terminal command shims.")
+    install.add_argument("install_command", nargs="?", default="status", choices=["status", "shim"], help="Preview install status or write a terminal shim.")
+    install.add_argument("--bin-dir", default="", help="Directory for the terminal shim. Defaults to ~/.local/bin.")
+    install.add_argument("--name", default="aegis", help="Command name to install. Defaults to aegis.")
+    install.add_argument("--approved", action="store_true", help="Write the terminal shim after explicit operator approval.")
+    update = sub.add_parser("update", help="Pull the latest AegisAgent code from GitHub into this checkout.")
+    update.add_argument("--remote", default="origin", help="Git remote to pull from. Defaults to origin.")
+    update.add_argument("--branch", default="main", help="Git branch to pull. Defaults to main.")
+    update.add_argument("--approved", action="store_true", help="Run git pull --ff-only after explicit operator approval.")
+    sub.add_parser("health", help="Show runtime health.")
+    audit = sub.add_parser("audit", help="Audit log commands.")
+    audit_sub = audit.add_subparsers(dest="audit_command")
+    audit_sub.add_parser("verify", help="Verify append-only audit hash chain.")
+
+    tools = sub.add_parser("tools", help="List tools or inspect policy.")
+    tools.add_argument("--matrix", action="store_true")
+    tools.add_argument("--evaluate")
+    tools.add_argument("--action", default="")
+    tools.add_argument("--approved", action="store_true")
+
+    sub.add_parser("skills", help="Discover workspace skills.")
+    memory = sub.add_parser("memory", help="Index or search memory.")
+    memory.add_argument("--index", action="store_true")
+    memory.add_argument("--query", default="")
+    memory.add_argument("--add", default="", help="Append an approval-gated note to curated memory.")
+    memory.add_argument("--title", default="", help="Title for --add memory notes.")
+    memory.add_argument("--kind", choices=["workspace", "user"], default="workspace", help="Curated memory file to update for --add.")
+    memory.add_argument("--approved", action="store_true", help="Append the memory note after explicit operator approval.")
+
+    sessions = sub.add_parser("sessions", help="Manage terminal sessions.")
+    sessions.add_argument("--create", metavar="TITLE", help="Create a named session.")
+    sessions.add_argument("--show", metavar="SESSION_ID", help="Show a session transcript.")
+    sessions.add_argument("--append", nargs=2, metavar=("SESSION_ID", "TEXT"), help="Append a user message to a session.")
+    sessions.add_argument("--query", metavar="TEXT", help="Search redacted session transcripts.")
+    sessions.add_argument("--limit", type=int, default=20)
+
+    run = sub.add_parser("run", help="Run a governed local shell command.")
+    run.add_argument("shell_command", help="Command to evaluate and execute when policy allows.")
+    run.add_argument("--approved", action="store_true", help="Allow policy-ask commands when they are not denied.")
+    run.add_argument("--timeout", type=int, default=20)
+
+    verify = sub.add_parser("verify", help="Run an allowlisted typed verification command without shell parsing.")
+    verify.add_argument("verify_command", nargs=argparse.REMAINDER, help="Optional command, for example python3 -m unittest discover -s tests -v.")
+    verify.add_argument("--timeout", type=int, default=60)
+
+    fetch = sub.add_parser("fetch", help="Fetch an http(s) URL through an approval-gated typed network tool.")
+    fetch.add_argument("url", help="Explicit http(s) URL to fetch.")
+    fetch.add_argument("--approved", action="store_true", help="Perform the network fetch after explicit operator approval.")
+    fetch.add_argument("--timeout", type=float, default=10.0)
+    fetch.add_argument("--max-bytes", type=int, default=20000)
+
+    edit = sub.add_parser("edit", help="Run approval-gated typed workspace edits.")
+    edit.add_argument("edit_command", nargs="?", default="replace", choices=["replace"], help="Edit operation to run.")
+    edit.add_argument("path", nargs="?", help="Workspace file path.")
+    edit.add_argument("--old", default="", help="Exact old text to replace.")
+    edit.add_argument("--new", default="", help="Replacement text.")
+    edit.add_argument("--approved", action="store_true", help="Perform the mutation after explicit operator approval.")
+
+    git = sub.add_parser("git", help="Run typed git workspace operations.")
+    git.add_argument("git_command", nargs="?", default="status", choices=["status", "diff", "stage", "commit", "branch", "remote"], help="Git operation to run.")
+    git.add_argument("git_args", nargs="*", help="Path, branch, or message arguments for the selected git operation.")
+    git.add_argument("--message", "-m", default="", help="Commit message for typed git commit.")
+    git.add_argument("--approved", action="store_true", help="Perform an approval-gated git mutation.")
+
+    chat = sub.add_parser("chat", help="Run one terminal agent turn without launching curses.")
+    chat.add_argument("prompt", help="Prompt to send to the local terminal agent runtime.")
+    chat.add_argument("--session", default="main", help="Session id or main.")
+    chat.add_argument("--json", action="store_true", help="Emit the turn result as JSON.")
+
+    model = sub.add_parser("model", help="Inspect or configure terminal model provider routes.")
+    model.add_argument("model_command", nargs="?", default="providers", choices=["providers", "doctor", "configure", "usage"], help="Provider command to run.")
+    model.add_argument("name", nargs="?", help="Provider name for configure, for example openai/gpt-5.5.")
+    model.add_argument("--mode", choices=["local", "api_key", "subscription_cli", "not_configured"], default="api_key")
+    model.add_argument("--api-key-env", default="", help="Environment variable name that will hold the provider key; the value is never read into config.")
+    model.add_argument("--base-url", default="", help="Optional provider base URL metadata; no network call is made.")
+    model.add_argument("--inactive", action="store_true", help="Save the route without making it active.")
+    model.add_argument("--limit", type=int, default=20, help="Limit recent model usage rows.")
+
+    connectors = sub.add_parser("connectors", help="Inspect or configure connector readiness metadata.")
+    connectors.add_argument("connector_command", nargs="?", default="list", choices=["list", "doctor", "configure"], help="Connector command to run.")
+    connectors.add_argument("name", nargs="?", choices=tuple(DEFAULT_CONNECTORS), help="Connector name for configure.")
+    connectors.add_argument("--token-env", default="", help="Environment variable name for a token handle; raw values are never stored.")
+    connectors.add_argument("--url-env", default="", help="Environment variable name for a URL handle; raw values are never stored.")
+    connectors.add_argument("--enable", action="store_true", help="Mark the connector metadata enabled; sends still require future explicit approval.")
+
+    browser = sub.add_parser("browser", help="Manage explicit browser session records without auto-launching a browser.")
+    browser.add_argument("browser_command", nargs="?", default="sessions", choices=["sessions", "open", "screenshot", "show"], help="Browser session command.")
+    browser.add_argument("browser_args", nargs="*", help="URL, session id, or screenshot path for the selected command.")
+    browser.add_argument("--title", default="", help="Optional title for browser open records.")
+    browser.add_argument("--note", default="", help="Optional note for screenshot receipts.")
+    browser.add_argument("--approved", action="store_true", help="Create the browser session or screenshot receipt after explicit approval.")
+    browser.add_argument("--limit", type=int, default=20)
+
+    tasks = sub.add_parser("tasks", help="Manage governed terminal tasks.")
+    tasks.add_argument("--submit", metavar="PROMPT", help="Queue a governed task without running it immediately.")
+    tasks.add_argument("--background", metavar="PROMPT", help="Start a governed task in a detached worker process.")
+    tasks.add_argument("--start", metavar="TASK_ID", help="Start one queued task in a detached worker process.")
+    tasks.add_argument("--run", metavar="TASK_ID", help="Run one queued task.")
+    tasks.add_argument("--show", metavar="TASK_ID", help="Show one task.")
+    tasks.add_argument("--events", metavar="TASK_ID", help="Show task progress events.")
+    tasks.add_argument("--output", metavar="TASK_ID", help="Show recorded task assistant/tool output.")
+    tasks.add_argument("--logs", metavar="TASK_ID", help="Show detached worker stdout/stderr logs.")
+    tasks.add_argument("--cancel", metavar="TASK_ID", help="Cancel one queued or running task.")
+    tasks.add_argument("--recover-stale", action="store_true", help="Mark running detached tasks failed when their worker pid is gone.")
+    tasks.add_argument("--reason", default="Cancelled by operator.", help="Cancellation reason.")
+    tasks.add_argument("--limit", type=int, default=20)
+
+    automations = sub.add_parser("automations", help="Manage durable gated automation schedule records.")
+    automations.add_argument("automation_command", nargs="?", default="list", choices=["list", "create", "show", "trigger", "run", "due", "missed", "replay-missed", "replay", "tick", "run-due", "worker", "daemon", "logs", "worker-log", "service", "service-status", "status", "pause", "resume", "delete"], help="Automation command to run.")
+    automations.add_argument("automation_args", nargs="*", help="Automation name or id.")
+    automations.add_argument("--schedule", default="", help="Schedule label, for example daily 09:00 or weekly Monday 14:00.")
+    automations.add_argument("--prompt", default="", help="Prompt to run when a future approved scheduler is added.")
+    automations.add_argument("--background", action="store_true", help="Start the triggered governed task in a detached worker.")
+    automations.add_argument("--now", default="", help="UTC timestamp for deterministic due checks, for example 2026-05-23T10:00:00Z.")
+    automations.add_argument("--interval", type=float, default=60.0, help="Worker interval in seconds.")
+    automations.add_argument("--max-ticks", type=int, default=1, help="Worker tick count. Use 0 to run until interrupted.")
+    automations.add_argument("--limit", type=int, default=20)
+
+    improve = sub.add_parser("improve", help="Manage governed self-improvement proposals without auto-editing.")
+    improve.add_argument("improve_command", nargs="?", default="status", choices=["status", "list", "propose", "show", "review", "approve", "reject", "implement", "handoff", "candidate", "candidate-show", "diff", "candidate-diff", "verify", "apply", "apply-candidate", "evidence", "complete", "implemented"], help="Self-improvement command to run.")
+    improve.add_argument("improve_args", nargs="*", help="Failure summary or proposal id.")
+    improve.add_argument("--target", default="runtime", help="Target subsystem for a proposal.")
+    improve.add_argument("--operation", default="unknown", help="Operation or path being repaired.")
+    improve.add_argument("--rationale", default="", help="Review rationale for approve/reject/review.")
+    improve.add_argument("--background", action="store_true", help="Start the implementation handoff task in a detached worker.")
+    improve.add_argument("--task", default="", help="Implementation task id for evidence records.")
+    improve.add_argument("--files", default="", help="Comma-separated changed files for implementation evidence.")
+    improve.add_argument("--validation", default="", help="Verification command used for implementation evidence.")
+    improve.add_argument("--result", default="", help="Verification result summary used for implementation evidence.")
+    improve.add_argument("--command-index", type=int, default=0, help="Candidate verification command index to run.")
+    improve.add_argument("--timeout", type=int, default=60, help="Candidate verification timeout in seconds.")
+    improve.add_argument("--limit", type=int, default=20)
+
+    subagents = sub.add_parser("subagents", help="Show subagent constraints.")
+    subagents.add_argument("--spawn")
+    subagents.add_argument("--delegate", metavar="TASK", help="Run a bounded local subagent delegation.")
+    subagents.add_argument("--stream", metavar="TASK", help="Run delegation and print timeline events as they happen.")
+    subagents.add_argument("--background", metavar="TASK", help="Start a background subagent job and return immediately.")
+    subagents.add_argument("--job", metavar="JOB_ID", help="Show one background subagent job.")
+    subagents.add_argument("--jobs", action="store_true", help="List background subagent jobs.")
+    subagents.add_argument("--cancel", metavar="JOB_ID", help="Cancel a queued or running background subagent job.")
+    subagents.add_argument("--recover-stale", action="store_true", help="Mark running background subagent jobs failed when their worker pid is gone.")
+    subagents.add_argument("--run-job", metavar="JOB_ID", help=argparse.SUPPRESS)
+    subagents.add_argument("--stop", metavar="SUBAGENT_ID", help="Cascade stop a persisted subagent tree.")
+    subagents.add_argument("--events", metavar="ROOT_ID", help="Show persisted subagent timeline events for a root id.")
+
+    agents = sub.add_parser("agents", help="Hermes-style agent surface backed by governed local subagents.")
+    agents.add_argument("agent_command", nargs="?", default="status", choices=["status", "profiles", "contracts", "delegate", "stream", "background", "bg", "jobs", "job", "monitor", "cancel", "recover"], help="Agent command to run.")
+    agents.add_argument("agent_args", nargs="*", help="Task text, job id, or root id for the selected agent command.")
+    agents.add_argument("--json", action="store_true", help="Emit JSON for status and profiles.")
+
+    tui = sub.add_parser("tui", help="Launch governed terminal TUI. This is the primary activation path.")
+    tui.add_argument("--view", choices=["command", "setup", "tools", "activation"], default="command")
+    tui.add_argument("--print", action="store_true", help="Print a static terminal frame instead of launching the interactive TUI.")
+    tui.add_argument("--classic", action="store_true", help="Use the static fallback instead of the curses terminal UI.")
+    tui.add_argument("--width", type=int, default=None)
+    tui.add_argument("--height", type=int, default=None)
+
+    gateway = sub.add_parser("gateway", help="Start FastAPI/WebSocket gateway.")
+    gateway.add_argument("--host", default="127.0.0.1")
+    gateway.add_argument("--port", type=int, default=8787)
+
+    web = sub.add_parser("web", help="Start gateway and report web GUI command.")
+    web.add_argument("--host", default="127.0.0.1")
+    web.add_argument("--port", type=int, default=8787)
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    paths = runtime_paths(args.workspace)
+    ensure_runtime(paths)
+    audit = AuditLog(paths)
+
+    if not args.command:
+        if sys.stdin.isatty() and sys.stdout.isatty():
+            return run_textual_app("command", paths=paths, classic=False)
+        payload = terminal_activation_payload(paths)
+        print(json.dumps(payload, indent=2) if args.json else format_terminal_activation(payload))
+        return 0
+
+    if args.command == "activate":
+        if sys.stdin.isatty() and sys.stdout.isatty():
+            return run_textual_app("command", paths=paths, classic=False)
+        payload = terminal_activation_payload(paths)
+        print(json.dumps(payload, indent=2) if args.json else format_terminal_activation(payload))
+        return 0
+
+    if args.command == "activation":
+        payload = terminal_activation_payload(paths)
+        print(json.dumps(payload, indent=2) if args.json else format_terminal_activation(payload))
+        return 0
+
+    if args.command == "setup":
+        setup_guide = SetupGuide(paths)
+        if args.run_checks or args.json:
+            print(json.dumps(setup_guide.run_checks(), indent=2))
+        elif args.section:
+            print(format_setup_section(setup_guide.section(args.section)))
+        elif args.full:
+            print(json.dumps(setup_guide.quickstart(), indent=2))
+        elif args.quick:
+            print(format_setup_quickstart(setup_guide.quickstart()))
+        else:
+            print(format_setup_quickstart(setup_guide.quickstart()))
+        return 0
+
+    if args.command == "capabilities":
+        payload = capability_map(paths)
+        if args.json:
+            json_payload = {**payload, "title": "AEGIS CAPABILITY GAPS", "capabilities": payload["gaps"]} if args.gaps else payload
+            print(json.dumps(json_payload, indent=2))
+        else:
+            print(format_capabilities(payload, gaps_only=args.gaps))
+        return 0
+
+    if args.command == "dashboard":
+        payload = dashboard_payload(paths)
+        print(json.dumps(payload, indent=2) if args.json else format_dashboard(payload))
+        return 0
+
+    if args.command == "install":
+        if args.install_command == "status":
+            payload = install_status_payload(paths, bin_dir=args.bin_dir, name=args.name)
+            print(json.dumps(payload, indent=2) if args.json else format_install_status(payload))
+            return 0
+        result = install_terminal_shim(paths, bin_dir=args.bin_dir, name=args.name, approved=args.approved)
+        audit.append(
+            "lifecycle.install",
+            {
+                "status": result.status,
+                "metadata": result.metadata,
+                "external_action_started": False,
+                "browser_auto_launch": False,
+            },
+        )
+        print(result.content if args.json else format_install_status(json.loads(result.content)))
+        return 0 if result.status == "ok" else 1
+
+    if args.command == "update":
+        result = update_from_github(paths, remote=args.remote, branch=args.branch, approved=args.approved)
+        audit.append(
+            "lifecycle.update",
+            {
+                "status": result.status,
+                "metadata": result.metadata,
+                "external_action_started": result.metadata.get("external_action_started", False),
+                "browser_auto_launch": False,
+            },
+        )
+        print(result.content if args.json else format_update_status(result))
+        return 0 if result.status == "ok" else 1
+
+    if args.command == "health":
+        result = {
+            "ok": True,
+            "version": __version__,
+            "workspace": str(paths.workspace),
+            "audit_chain_ok": audit.verify()["ok"],
+            "sandbox": detect_sandbox().to_dict(),
+            "tools": enabled_counts(),
+            "memory_files": [str(path) for path in memory_files(paths)],
+        }
+        print(json.dumps(result, indent=2))
+        return 0
+
+    if args.command == "audit":
+        if args.audit_command == "verify":
+            print(json.dumps(audit.verify(), indent=2))
+            return 0 if audit.verify()["ok"] else 1
+        parser.error("audit requires a subcommand")
+
+    if args.command == "tools":
+        registry = ToolRegistry()
+        if args.evaluate:
+            result = registry.evaluate(args.evaluate, args.action, approved=args.approved)
+            audit.append("tool.evaluate", result)
+            print(json.dumps(result, indent=2))
+            return 0 if result["action"] != "deny" else 1
+        if args.matrix and not args.json:
+            print(render(TuiState(view="tools")))
+        else:
+            print(json.dumps(registry.list(), indent=2))
+        return 0
+
+    if args.command == "skills":
+        loader = SkillLoader([paths.skills_dir, Path.home() / ".aegisagent" / "skills"])
+        print(json.dumps([skill.to_dict() for skill in loader.discover()], indent=2))
+        return 0
+
+    if args.command == "memory":
+        store = MemoryStore(paths)
+        if args.add:
+            result = store.add_curated_note(args.kind, args.title, args.add, approved=args.approved)
+            audit.append(
+                "memory.note.add",
+                {
+                    "status": result["status"],
+                    "metadata": result.get("metadata", {}),
+                    "external_action_started": False,
+                    "browser_auto_launch": False,
+                },
+            )
+            print(json.dumps(result, indent=2))
+            return 0 if result["status"] == "ok" else 1
+        if args.index:
+            print(json.dumps({"indexed": store.index_curated_files()}, indent=2))
+        else:
+            query = args.query or "AegisAgent"
+            print(json.dumps(store.search(query), indent=2))
+        return 0
+
+    if args.command == "sessions":
+        sessions = SessionStore(paths)
+        if args.create:
+            session = sessions.create(args.create)
+            audit.append("session.created", {"session_id": session.id, "title": session.title})
+            print(json.dumps(session.to_dict(), indent=2))
+        elif args.show:
+            print(json.dumps({"session_id": args.show, "messages": sessions.transcript(args.show, limit=args.limit)}, indent=2))
+        elif args.append:
+            session = sessions.append(args.append[0], "user", args.append[1], metadata={"source": "cli"})
+            audit.append("session.message_appended", {"session_id": session.id, "role": "user"})
+            print(json.dumps({"session_id": session.id, "message_count": len(session.messages)}, indent=2))
+        elif args.query:
+            results = sessions.search(args.query, limit=args.limit)
+            audit.append("session.search", {"query": args.query, "result_count": len(results), "limit": args.limit})
+            print(json.dumps({"query": args.query, "results": results}, indent=2))
+        else:
+            print(json.dumps({"sessions_dir": str(paths.sessions_dir), "sessions": sessions.list(limit=args.limit)}, indent=2))
+        return 0
+
+    if args.command == "run":
+        result = GovernedExecutor(paths).run_shell(args.shell_command, approved=args.approved, timeout=args.timeout)
+        print(json.dumps(result.to_dict(), indent=2))
+        return 0 if result.executed and result.returncode == 0 else 1
+
+    if args.command == "verify":
+        result = WorkspaceToolRunner(paths).run_tests(" ".join(args.verify_command), timeout=args.timeout)
+        audit.append(
+            "cli.tool.completed",
+            {
+                "tool": result.name,
+                "status": result.status,
+                "metadata": result.metadata,
+                "external_action_started": False,
+                "browser_auto_launch": False,
+            },
+        )
+        print(result.content)
+        return 0 if result.status == "ok" else 1
+
+    if args.command == "fetch":
+        result = WebToolRunner(paths).fetch(args.url, approved=args.approved, timeout=args.timeout, max_bytes=args.max_bytes)
+        audit.append(
+            "cli.tool.completed",
+            {
+                "tool": result.name,
+                "status": result.status,
+                "metadata": result.metadata,
+                "external_action_started": result.metadata.get("external_action_started", False),
+                "browser_auto_launch": False,
+            },
+        )
+        print(result.content)
+        return 0 if result.status == "ok" else 1
+
+    if args.command == "edit":
+        if args.edit_command == "replace":
+            if not args.path:
+                parser.error("edit replace requires a workspace file path")
+            result = WorkspaceToolRunner(paths).replace_text(args.path, args.old, args.new, approved=args.approved)
+            audit.append(
+                "cli.tool.completed",
+                {
+                    "tool": result.name,
+                    "status": result.status,
+                    "metadata": result.metadata,
+                    "external_action_started": False,
+                    "browser_auto_launch": False,
+                },
+            )
+            print(result.content)
+            return 0 if result.status == "ok" else 1
+
+    if args.command == "git":
+        runner = WorkspaceToolRunner(paths)
+        if args.git_command == "status":
+            result = runner.git_status()
+        elif args.git_command == "diff":
+            result = runner.git_diff(args.git_args[0] if args.git_args else None)
+        elif args.git_command == "stage":
+            result = runner.git_stage(args.git_args, approved=args.approved)
+        elif args.git_command == "commit":
+            result = runner.git_commit(args.message or " ".join(args.git_args), approved=args.approved)
+        elif args.git_command == "branch":
+            branch_operation = args.git_args[0] if args.git_args else "list"
+            branch_name = args.git_args[1] if len(args.git_args) > 1 else ""
+            result = runner.git_branch(branch_operation, branch_name, approved=args.approved)
+        elif args.git_command == "remote":
+            remote_operation = args.git_args[0] if args.git_args else "list"
+            remote_name = args.git_args[1] if len(args.git_args) > 1 else ""
+            remote_branch = args.git_args[2] if len(args.git_args) > 2 else ""
+            result = runner.git_remote(remote_operation, remote_name, remote_branch, approved=args.approved)
+        else:
+            parser.error("git requires status, diff, stage, commit, branch, or remote")
+        audit.append(
+            "cli.tool.completed",
+            {
+                "tool": result.name,
+                "status": result.status,
+                "metadata": result.metadata,
+                "external_action_started": False,
+                "browser_auto_launch": False,
+            },
+        )
+        print(result.content)
+        return 0 if result.status == "ok" else 1
+
+    if args.command == "chat":
+        result = AgentRuntime(paths).respond(args.prompt, session_id=args.session, source="cli")
+        if args.json:
+            print(json.dumps(result.to_dict(), indent=2))
+        else:
+            print(result.assistant_message)
+            print(f"audit receipt: {result.receipt_id}")
+        return 0
+
+    if args.command == "model":
+        providers = ProviderStore(paths)
+        if args.model_command == "providers":
+            print(json.dumps(providers.summary(), indent=2))
+        elif args.model_command == "doctor":
+            print(json.dumps(providers.doctor(), indent=2))
+        elif args.model_command == "usage":
+            print(json.dumps(ProviderUsageStore(paths).summary(limit=args.limit), indent=2))
+        elif args.model_command == "configure":
+            if not args.name:
+                parser.error("model configure requires a provider name")
+            print(
+                json.dumps(
+                    providers.configure(
+                        args.name,
+                        mode=args.mode,
+                        api_key_env=args.api_key_env,
+                        base_url=args.base_url,
+                        active=not args.inactive,
+                        source="cli",
+                    ),
+                    indent=2,
+                )
+            )
+        return 0
+
+    if args.command == "connectors":
+        connectors = ConnectorStore(paths)
+        if args.connector_command == "list":
+            print(json.dumps(connectors.summary(), indent=2))
+        elif args.connector_command == "doctor":
+            print(json.dumps(connectors.doctor(), indent=2))
+        elif args.connector_command == "configure":
+            if not args.name:
+                parser.error("connectors configure requires a connector name")
+            print(
+                json.dumps(
+                    connectors.configure(
+                        args.name,
+                        token_env=args.token_env,
+                        url_env=args.url_env,
+                        enabled=args.enable,
+                        source="cli",
+                    ),
+                    indent=2,
+                )
+            )
+        return 0
+
+    if args.command == "browser":
+        store = BrowserSessionStore(paths)
+        if args.browser_command == "sessions":
+            print(json.dumps(browser_summary(paths, limit=args.limit), indent=2))
+            return 0
+        if args.browser_command == "show":
+            if not args.browser_args:
+                parser.error("browser show requires a session id")
+            print(json.dumps(store.get(args.browser_args[0]), indent=2))
+            return 0
+        if args.browser_command == "open":
+            if not args.browser_args:
+                parser.error("browser open requires an http(s) URL")
+            result = store.open_url(args.browser_args[0], title=args.title, approved=args.approved, source="cli")
+            audit.append(
+                "browser.session.open",
+                {
+                    "status": result["status"],
+                    "metadata": result.get("metadata", {}),
+                    "external_action_started": False,
+                    "browser_auto_launch": False,
+                },
+            )
+            print(json.dumps(result, indent=2))
+            return 0 if result["status"] == "ok" else 1
+        if args.browser_command == "screenshot":
+            if len(args.browser_args) < 2:
+                parser.error("browser screenshot requires a session id and workspace screenshot path")
+            result = store.record_screenshot(args.browser_args[0], args.browser_args[1], note=args.note, approved=args.approved, source="cli")
+            audit.append(
+                "browser.session.screenshot",
+                {
+                    "status": result["status"],
+                    "metadata": result.get("metadata", {}),
+                    "external_action_started": False,
+                    "browser_auto_launch": False,
+                },
+            )
+            print(json.dumps(result, indent=2))
+            return 0 if result["status"] == "ok" else 1
+
+    if args.command == "tasks":
+        runner = TaskRunner(paths)
+        if args.submit:
+            print(json.dumps(runner.submit(args.submit, source="cli").to_dict(), indent=2))
+        elif args.background:
+            print(json.dumps(runner.submit_background(args.background, source="cli").to_dict(), indent=2))
+        elif args.start:
+            print(json.dumps(runner.start_background(args.start).to_dict(), indent=2))
+        elif args.run:
+            print(json.dumps(runner.run(args.run).to_dict(), indent=2))
+        elif args.show:
+            print(json.dumps(runner.get(args.show).to_dict(), indent=2))
+        elif args.events:
+            print(json.dumps({"task_id": args.events, "events": [event.to_dict() for event in runner.events(args.events)]}, indent=2))
+        elif args.output:
+            if args.json:
+                print(json.dumps({"task_id": args.output, "outputs": [output.to_dict() for output in runner.outputs(args.output)]}, indent=2))
+            else:
+                print(format_task_outputs(runner.outputs(args.output)))
+        elif args.logs:
+            logs = runner.worker_logs(args.logs)
+            if args.json:
+                print(json.dumps(logs, indent=2))
+            else:
+                print(format_task_worker_logs(logs))
+        elif args.cancel:
+            print(json.dumps(runner.cancel(args.cancel, reason=args.reason).to_dict(), indent=2))
+        elif args.recover_stale:
+            print(json.dumps({"recovered": [record.to_dict() for record in runner.recover_stale_running()]}, indent=2))
+        else:
+            print(json.dumps({"tasks": runner.list(limit=args.limit)}, indent=2))
+        return 0
+
+    if args.command == "automations":
+        registry = AutomationRegistry(paths)
+        command = args.automation_command
+        automation_args = " ".join(args.automation_args).strip()
+        if command == "list":
+            payload = automation_summary(paths)
+            if args.limit:
+                payload["automations"] = payload["automations"][: args.limit]
+            print(json.dumps(payload, indent=2) if args.json else format_automations(payload))
+        elif command == "create":
+            name = automation_args
+            job, receipt = registry.create(name, args.schedule, args.prompt, source="cli")
+            payload = {"automation": job.to_dict(), "receipt": receipt}
+            print(json.dumps(payload, indent=2) if args.json else format_automation(job, receipt=receipt))
+        elif command == "show":
+            if not automation_args:
+                parser.error("automations show requires an automation id")
+            job = registry.get(automation_args)
+            print(json.dumps(job.to_dict(), indent=2) if args.json else format_automation(job))
+        elif command in {"trigger", "run"}:
+            if not automation_args:
+                parser.error(f"automations {command} requires an automation id")
+            payload = registry.trigger(automation_args, start_background=args.background, source="cli")
+            if args.json:
+                print(json.dumps(payload, indent=2))
+            elif payload["status"] == "blocked":
+                print(f"Automation trigger blocked: {payload['reason']}")
+                print(format_automation(payload["automation"], receipt=payload["receipt"]))
+            else:
+                print(format_automation(payload["automation"], receipt=payload["receipt"]))
+                print("")
+                print(f"task       {payload['task']['id']}  {payload['task']['status']}")
+                print(f"watch      aegisagent tasks --events {payload['task']['id']}")
+        elif command == "due":
+            payload = registry.due(now=args.now or None, limit=args.limit, source="cli")
+            print(json.dumps(payload, indent=2) if args.json else format_due_automations(payload))
+        elif command == "missed":
+            payload = registry.missed(now=args.now or None, limit=args.limit, source="cli")
+            print(json.dumps(payload, indent=2) if args.json else format_missed_automations(payload))
+        elif command in {"replay", "replay-missed"}:
+            payload = registry.replay_missed(now=args.now or None, start_background=args.background, limit=args.limit, source="cli")
+            print(json.dumps(payload, indent=2) if args.json else format_missed_replay(payload))
+        elif command in {"tick", "run-due"}:
+            payload = registry.run_due(now=args.now or None, start_background=args.background, limit=args.limit, source="cli")
+            print(json.dumps(payload, indent=2) if args.json else format_due_run(payload))
+        elif command in {"worker", "daemon"}:
+            payload = registry.worker(now=args.now or None, interval_seconds=args.interval, max_ticks=args.max_ticks, start_background=args.background, limit=args.limit, source="cli-worker")
+            print(json.dumps(payload, indent=2) if args.json else format_worker_run(payload))
+        elif command in {"logs", "worker-log"}:
+            payload = registry.worker_logs(limit=args.limit, run_id=automation_args, source="cli")
+            print(json.dumps(payload, indent=2) if args.json else format_worker_logs(payload))
+        elif command == "service":
+            payload = registry.service_wrapper(interval_seconds=args.interval, source="cli")
+            print(json.dumps(payload, indent=2) if args.json else format_service_wrapper(payload))
+        elif command in {"service-status", "status"}:
+            payload = registry.service_status(source="cli")
+            print(json.dumps(payload, indent=2) if args.json else format_service_status(payload))
+        elif command == "pause":
+            if not automation_args:
+                parser.error("automations pause requires an automation id")
+            job, receipt = registry.set_status(automation_args, "PAUSED", source="cli")
+            payload = {"automation": job.to_dict(), "receipt": receipt}
+            print(json.dumps(payload, indent=2) if args.json else format_automation(job, receipt=receipt))
+        elif command == "resume":
+            if not automation_args:
+                parser.error("automations resume requires an automation id")
+            job, receipt = registry.set_status(automation_args, "ACTIVE", source="cli")
+            payload = {"automation": job.to_dict(), "receipt": receipt}
+            print(json.dumps(payload, indent=2) if args.json else format_automation(job, receipt=receipt))
+        elif command == "delete":
+            if not automation_args:
+                parser.error("automations delete requires an automation id")
+            payload = registry.delete(automation_args, source="cli")
+            print(json.dumps(payload, indent=2) if args.json else f"Deleted automation {payload['deleted']['id']} ({payload['deleted']['name']})\nreceipt    {payload['receipt']}")
+        return 0
+
+    if args.command == "improve":
+        store = ImprovementStore(paths)
+        command = args.improve_command
+        improve_args = " ".join(args.improve_args).strip()
+        if command in {"status", "list"}:
+            payload = improvement_summary(paths)
+            if args.limit:
+                payload["proposals"] = payload["proposals"][: args.limit]
+            print(json.dumps(payload, indent=2) if args.json else format_improvements(payload))
+        elif command == "propose":
+            if not improve_args:
+                parser.error("improve propose requires a failure summary")
+            proposal, receipt = store.propose_from_failure(improve_args, target_subsystem=args.target, operation=args.operation, source="cli")
+            payload = {"proposal": proposal.to_dict(), "receipt": receipt}
+            print(json.dumps(payload, indent=2) if args.json else format_improvement(proposal, receipt=receipt))
+        elif command == "show":
+            if not improve_args:
+                parser.error("improve show requires a proposal id")
+            proposal = store.get(improve_args)
+            print(json.dumps(proposal.to_dict(), indent=2) if args.json else format_improvement(proposal))
+        elif command in {"review", "approve", "reject"}:
+            if not improve_args:
+                parser.error(f"improve {command} requires a proposal id")
+            decision = "review" if command == "review" else command
+            proposal, receipt = store.review(improve_args, decision=decision, rationale=args.rationale, source="cli")
+            payload = {"proposal": proposal.to_dict(), "receipt": receipt}
+            print(json.dumps(payload, indent=2) if args.json else format_improvement(proposal, receipt=receipt))
+        elif command in {"implement", "handoff"}:
+            if not improve_args:
+                parser.error(f"improve {command} requires a proposal id")
+            payload = store.handoff(improve_args, start_background=args.background, source="cli")
+            if args.json:
+                print(json.dumps(payload, indent=2))
+            elif payload["status"] == "blocked":
+                print(f"Improvement handoff blocked: {payload['reason']}")
+                print(format_improvement(payload["proposal"], receipt=payload["receipt"]))
+            else:
+                print(format_improvement(payload["proposal"], receipt=payload["receipt"]))
+                print("")
+                print(f"task       {payload['task']['id']}  {payload['task']['status']}")
+                print(f"watch      aegisagent tasks --events {payload['task']['id']}")
+        elif command == "candidate":
+            if not improve_args:
+                parser.error("improve candidate requires a proposal id")
+            payload = store.generate_candidate(improve_args, source="cli")
+            if args.json:
+                print(json.dumps(payload, indent=2))
+            elif payload["status"] == "blocked":
+                print(f"Improvement candidate blocked: {payload['reason']}")
+                print(format_improvement(payload["proposal"], receipt=payload["receipt"]))
+            else:
+                print(format_candidate(payload["candidate"], receipt=payload["receipt"]))
+        elif command == "candidate-show":
+            if not improve_args:
+                parser.error("improve candidate-show requires a candidate id")
+            candidate = store.get_candidate(improve_args)
+            print(json.dumps(candidate.to_dict(), indent=2) if args.json else format_candidate(candidate))
+        elif command in {"diff", "candidate-diff"}:
+            if not improve_args:
+                parser.error(f"improve {command} requires a candidate id")
+            payload = store.review_candidate_diff(improve_args, source="cli")
+            print(json.dumps(payload, indent=2) if args.json else format_candidate_diff_review(payload))
+        elif command == "verify":
+            if not improve_args:
+                parser.error("improve verify requires a candidate id")
+            payload = store.run_candidate_verification(improve_args, command_index=args.command_index, timeout_seconds=args.timeout, source="cli")
+            if args.json:
+                print(json.dumps(payload, indent=2))
+            elif payload["status"] == "blocked":
+                print(f"Improvement verification blocked: {payload['reason']}")
+                print(format_candidate(payload["candidate"], receipt=payload["receipt"]))
+            else:
+                print(format_verification_run(payload, receipt=payload["receipt"]))
+        elif command in {"apply", "apply-candidate"}:
+            if not improve_args:
+                parser.error(f"improve {command} requires a candidate id")
+            payload = store.apply_candidate(improve_args, start_background=args.background, source="cli")
+            if args.json:
+                print(json.dumps(payload, indent=2))
+            elif payload["status"] == "blocked":
+                print(f"Improvement candidate apply blocked: {payload['reason']}")
+                print(format_candidate(payload["candidate"], receipt=payload["receipt"]))
+            else:
+                print(format_candidate(payload["candidate"], receipt=payload["receipt"]))
+                print("")
+                print(f"task       {payload['task']['id']}  {payload['task']['status']}")
+                print(f"watch      aegisagent tasks --events {payload['task']['id']}")
+        elif command == "evidence":
+            if not improve_args:
+                parser.error("improve evidence requires a proposal id")
+            payload = store.record_evidence(
+                improve_args,
+                changed_files=args.files.split(","),
+                verification_command=args.validation,
+                verification_result=args.result,
+                task_id=args.task,
+                source="cli",
+            )
+            if args.json:
+                print(json.dumps(payload, indent=2))
+            elif payload["status"] == "blocked":
+                print(f"Improvement evidence blocked: {payload['reason']}")
+                print(format_improvement(payload["proposal"], receipt=payload["receipt"]))
+            else:
+                print(format_improvement(payload["proposal"], receipt=payload["receipt"]))
+        elif command in {"complete", "implemented"}:
+            if not improve_args:
+                parser.error(f"improve {command} requires a proposal id")
+            payload = store.mark_implemented(improve_args, source="cli")
+            if args.json:
+                print(json.dumps(payload, indent=2))
+            elif payload["status"] == "blocked":
+                print(f"Improvement completion blocked: {payload['reason']}")
+                print(format_improvement(payload["proposal"], receipt=payload["receipt"]))
+            else:
+                print(format_improvement(payload["proposal"], receipt=payload["receipt"]))
+        return 0
+
+    if args.command == "subagents":
+        orchestrator = LocalSubagentOrchestrator(paths)
+        if args.delegate:
+            result = orchestrator.delegate(args.delegate)
+            print(json.dumps(result.to_dict(), indent=2))
+        elif args.stream:
+            print("SUBAGENT LIVE")
+            result = orchestrator.delegate(args.stream, event_sink=lambda event: print(format_event_line(event), flush=True))
+            print("")
+            print(json.dumps({"root_id": result.root.id, "receipt_id": result.receipt_id, "status": result.root.status}, indent=2))
+        elif args.background:
+            record = orchestrator.start_background(args.background)
+            print(json.dumps(record.to_dict(), indent=2))
+        elif args.run_job:
+            record = orchestrator.run_background_job(args.run_job)
+            print(json.dumps(record.to_dict(), indent=2))
+        elif args.cancel:
+            record = orchestrator.cancel_background(args.cancel)
+            print(json.dumps(record.to_dict(), indent=2))
+        elif args.job:
+            print(json.dumps(orchestrator.background_job(args.job).to_dict(), indent=2))
+        elif args.jobs:
+            print(json.dumps({"jobs": orchestrator.background_jobs()}, indent=2))
+        elif args.recover_stale:
+            print(json.dumps({"recovered": [record.to_dict() for record in orchestrator.recover_stale_background()]}, indent=2))
+        elif args.stop:
+            result = orchestrator.stop(args.stop)
+            print(json.dumps(result.to_dict(), indent=2))
+        elif args.events:
+            events = orchestrator.events(args.events)
+            print(json.dumps({"root_id": args.events, "events": [event.to_dict() for event in events]}, indent=2))
+        elif args.spawn:
+            queue = SubagentQueue()
+            record = queue.spawn(args.spawn)
+            SubagentStore(paths).save(record)
+            audit.append("subagent.spawn", record.to_dict())
+            print(json.dumps(record.to_dict(), indent=2))
+        else:
+            queue = SubagentQueue()
+            print(
+                json.dumps(
+                    {
+                        "max_concurrency": queue.limits.max_concurrency,
+                        "max_depth": queue.limits.max_depth,
+                        "max_children": queue.limits.max_children,
+                        "records": SubagentStore(paths).list(),
+                    },
+                    indent=2,
+                )
+            )
+        return 0
+
+    if args.command == "agents":
+        orchestrator = LocalSubagentOrchestrator(paths)
+        command = args.agent_command
+        agent_args = " ".join(args.agent_args).strip()
+        if command == "status":
+            payload = agent_status(paths)
+            print(json.dumps(payload, indent=2) if args.json else format_agent_status(payload))
+        elif command == "profiles":
+            payload = {"profiles": agent_status(paths)["profiles"], "terminal_first": True, "browser_auto_launch": False}
+            print(json.dumps(payload, indent=2) if args.json else format_agent_profiles())
+        elif command == "contracts":
+            payload = agent_contracts_payload(paths)
+            print(json.dumps(payload, indent=2) if args.json else format_agent_contracts(payload))
+        elif command == "delegate":
+            if not agent_args:
+                parser.error("agents delegate requires a task")
+            print(json.dumps(orchestrator.delegate(agent_args).to_dict(), indent=2))
+        elif command == "stream":
+            if not agent_args:
+                parser.error("agents stream requires a task")
+            print("AGENTS LIVE")
+            result = orchestrator.delegate(agent_args, event_sink=lambda event: print(format_event_line(event), flush=True))
+            print("")
+            print(json.dumps({"root_id": result.root.id, "receipt_id": result.receipt_id, "status": result.root.status}, indent=2))
+        elif command in {"background", "bg"}:
+            if not agent_args:
+                parser.error(f"agents {command} requires a task")
+            print(json.dumps(orchestrator.start_background(agent_args).to_dict(), indent=2))
+        elif command == "jobs":
+            print(json.dumps({"jobs": orchestrator.background_jobs()}, indent=2))
+        elif command in {"job", "monitor"}:
+            if not agent_args:
+                parser.error(f"agents {command} requires a job id")
+            print(json.dumps(orchestrator.background_job(agent_args).to_dict(), indent=2))
+        elif command == "cancel":
+            if not agent_args:
+                parser.error("agents cancel requires a job id")
+            print(json.dumps(orchestrator.cancel_background(agent_args).to_dict(), indent=2))
+        elif command == "recover":
+            print(json.dumps({"recovered": [record.to_dict() for record in orchestrator.recover_stale_background()]}, indent=2))
+        return 0
+
+    if args.command == "tui":
+        if args.print:
+            print(render(TuiState(view=args.view), width=args.width, height=args.height))
+            return 0
+        return run_textual_app(args.view, paths=paths, classic=args.classic)
+
+    if args.command == "gateway":
+        return run_gateway(args.host, args.port, str(paths.workspace))
+
+    if args.command == "web":
+        if paths.web_dir.exists():
+            print(f"Web GUI source: {paths.web_dir}")
+            print(f"Run in another shell: cd {paths.web_dir} && npm install && npm run dev")
+        return run_gateway(args.host, args.port, str(paths.workspace))
+
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))
