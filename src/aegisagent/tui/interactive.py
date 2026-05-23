@@ -940,8 +940,11 @@ def dispatch_interactive_command(command: str, paths: RuntimePaths) -> str:
     audit = AuditLog(paths)
     if command in {"/help", "help", "?"}:
         print("AegisAgent TUI controls")
+        print("- Enter sends the prompt, dispatches the selected slash command, or confirms the focused item.")
         print("- Type normally to run a local agent turn in the persistent terminal session.")
         print("- Type / to open slash commands; Tab accepts the highlighted command.")
+        print("- Arrow keys move through history, setup cards, or slash palette candidates.")
+        print("- Esc clears transient input or leaves the current overlay.")
         print("- Use /commands for grouped Hermes-style command lanes.")
         print("- Use /activation to show the exact terminal startup path.")
         print("- Use /dashboard for a terminal-only operator posture summary.")
@@ -1664,7 +1667,40 @@ def dispatch_interactive_command(command: str, paths: RuntimePaths) -> str:
         )
         return "run"
     if command.startswith("/policy"):
-        print("Usage: /policy shell <command>")
+        raw = command.removeprefix("/policy").strip()
+        if not raw:
+            print("Usage: /policy shell <command> or /policy <tool-name> [action]")
+            return "policy"
+        parts = raw.split(maxsplit=1)
+        tool_name = parts[0]
+        action = parts[1] if len(parts) > 1 else "inspect"
+        registry = ToolRegistry()
+        result = registry.evaluate(tool_name, action)
+        receipt = audit.append(
+            "tui.policy",
+            {
+                "tool": tool_name,
+                "action": action,
+                "decision": result,
+                "external_action_started": False,
+                "browser_auto_launch": False,
+            },
+        )
+        payload = {
+            "title": "AEGIS POLICY INSPECTOR",
+            "tool": tool_name,
+            "action": action,
+            "known": result["known"],
+            "decision": result["action"],
+            "risk": result["risk"],
+            "rationale": result["rationale"],
+            "receipt": receipt["id"],
+            "browser_auto_launch": False,
+            "external_action_started": False,
+        }
+        if "tool_spec" in result:
+            payload["tool_spec"] = result["tool_spec"]
+        print_json(payload)
         return "policy"
     turn = AgentRuntime(paths).respond(command, source="tui")
     print(turn.assistant_message)

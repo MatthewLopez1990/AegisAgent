@@ -10,6 +10,7 @@ from aegisagent.core.connectors import ConnectorStore
 from aegisagent.core.improvement import ImprovementStore
 from aegisagent.core.provider_config import ProviderUsageStore
 from aegisagent.core.sessions import SessionStore
+from aegisagent.core.setup_flow import terminal_command_name
 from aegisagent.core.subagents import BackgroundJobStore, SubagentStore
 from aegisagent.core.tasks import TaskStore
 from aegisagent.core.tools import enabled_counts
@@ -188,6 +189,25 @@ def capability_map(paths: RuntimePaths) -> dict[str, Any]:
     usage = ProviderUsageStore(paths).summary(limit=1)
     browser_sessions = BrowserSessionStore(paths).list(limit=1000)
     capabilities = [capability.to_dict() for capability in CAPABILITIES]
+    command = terminal_command_name()
+    dynamic_commands = {
+        "terminal_activation": (command, f"{command} activate", f"{command} tui"),
+        "prompt_first_tui": (f"{command} tui", f"{command} tui --print", "/commands"),
+        "setup_wizard": (f"{command} setup --quick", f"{command} setup --run-checks", "/setup"),
+        "policy_audit_security": (f"{command} tools", f"{command} audit verify", "/policy shell rg --files"),
+        "task_queue": (f"{command} tasks --submit <request>", f"{command} tasks --background <request>", "/tasks watch <id>"),
+        "agents_subagents": (f"{command} agents", f"{command} agents contracts", f"{command} agents delegate <task>", "/agents bg <task>"),
+        "memory_sessions_skills": (f"{command} memory --add <note> --title <title> --approved", f"{command} sessions --query <text>", "/memory add"),
+        "model_provider_routing": (f"{command} chat <prompt>", f"{command} model usage", "/model usage"),
+        "connectors_messaging_mcp_browser": (f"{command} connectors", f"{command} browser sessions", "/browser open <url> | approve"),
+        "gateway_web": (f"{command} web", f"{command} gateway", "/web"),
+        "automations_cron": (f"{command} automations due", f"{command} automations missed", "/automations due"),
+        "self_improvement_learning_loop": (f"{command} improve diff <candidate-id>", f"{command} improve verify <candidate-id>", "/improve apply <candidate-id>"),
+        "browser_live_automation": (f"{command} browser open <url> --approved", f"{command} browser screenshot <id> <path> --approved", "/browser"),
+    }
+    for capability in capabilities:
+        if capability["key"] in dynamic_commands:
+            capability["commands"] = list(dynamic_commands[capability["key"]])
     counts = {
         "ready": sum(1 for capability in capabilities if capability["status"] == "ready"),
         "partial": sum(1 for capability in capabilities if capability["status"] == "partial"),
@@ -222,8 +242,8 @@ def capability_map(paths: RuntimePaths) -> dict[str, Any]:
         "capabilities": capabilities,
         "gaps": [capability for capability in capabilities if capability["status"] != "ready"],
         "next": [
-            "Use `aegisagent capabilities --gaps` or `/gaps` to see remaining Hermes-class backlog.",
-            "Use `aegisagent setup --run-checks` before configuring external routes or connectors.",
+            f"Use `{command} capabilities --gaps` or `/gaps` to see remaining Hermes-class backlog.",
+            f"Use `{command} setup --run-checks` before configuring external routes or connectors.",
             "Use `/agents bg <task>` for bounded terminal-first multi-agent work.",
         ],
     }

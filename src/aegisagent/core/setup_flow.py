@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+import os
 from typing import Any
 
 from aegisagent import __version__
@@ -16,6 +17,10 @@ from aegisagent.security.sandbox import detect_sandbox
 
 
 SETUP_SECTIONS = ("model", "secrets", "sandbox", "tools", "connectors", "memory")
+
+
+def terminal_command_name() -> str:
+    return os.environ.get("AEGIS_COMMAND_NAME", "aegis").strip() or "aegis"
 
 
 @dataclass(frozen=True, slots=True)
@@ -43,6 +48,7 @@ class SetupGuide:
 
     def quickstart(self) -> dict[str, Any]:
         sections = [self.section(name) for name in SETUP_SECTIONS]
+        command = terminal_command_name()
         return {
             "title": "AEGIS SETUP QUICKSTART",
             "version": __version__,
@@ -52,59 +58,64 @@ class SetupGuide:
             "browser_required": False,
             "steps": [section.to_dict() for section in sections],
             "next": [
-                "1. Run `aegisagent setup model` or `/setup model`.",
-                "2. Run `aegisagent setup --run-checks` or `/setup run-checks`.",
-                "3. Launch `aegisagent tui` and keep working from the terminal composer.",
+                f"1. Run `{command} setup model` or `/setup model`.",
+                f"2. Run `{command} setup --run-checks` or `/setup run-checks`.",
+                f"3. Launch `{command}` or `{command} tui` and keep working from the terminal composer.",
             ],
         }
 
     def section(self, name: str) -> SetupSection:
         if name == "model":
             provider = ProviderStore(self.paths).summary()
+            command = terminal_command_name()
             return SetupSection(
                 "model",
                 str(provider.get("mode") or "unknown"),
                 f"Active provider: {provider.get('active_provider', '')}. Configure external routes by environment-variable handle, not raw secret.",
                 (
-                    "aegisagent model providers",
-                    "aegisagent model configure openai/gpt-5.5 --mode api_key --api-key-env OPENAI_API_KEY",
-                    "aegisagent model doctor",
+                    f"{command} model providers",
+                    f"{command} model configure openai/gpt-5.5 --mode api_key --api-key-env OPENAI_API_KEY",
+                    f"{command} model doctor",
                 ),
                 tuple({"name": route["name"], "status": route["status"]} for route in provider.get("routes", [])),
             )
         if name == "secrets":
+            command = terminal_command_name()
             return SetupSection(
                 "secrets",
                 "handles_only",
                 "Secrets are referenced by handles such as environment variable names; raw secret values are not stored in setup config or audit payloads.",
-                ("export OPENAI_API_KEY=...", "aegisagent model configure openai/gpt-5.5 --mode api_key --api-key-env OPENAI_API_KEY"),
+                ("export OPENAI_API_KEY=...", f"{command} model configure openai/gpt-5.5 --mode api_key --api-key-env OPENAI_API_KEY"),
                 ({"name": "raw_secret_values_included", "ok": False},),
             )
         if name == "sandbox":
             sandbox = detect_sandbox()
+            command = terminal_command_name()
             return SetupSection(
                 "sandbox",
                 sandbox.backend,
                 sandbox.rationale,
-                ("aegisagent health", "/status", "/policy shell rg --files"),
+                (f"{command} health", "/status", "/policy shell rg --files"),
                 (sandbox.to_dict(),),
             )
         if name == "tools":
             counts = enabled_counts()
+            command = terminal_command_name()
             return SetupSection(
                 "tools",
                 "policy_gated",
                 f"{counts['enabled']} tools enabled, {counts['ask']} actions require approval.",
-                ("aegisagent tools --matrix", "/tools", "/policy shell <command>"),
+                (f"{command} tools --matrix", "/tools", "/policy shell <command>"),
                 (counts,),
             )
         if name == "connectors":
             connector_summary = ConnectorStore(self.paths).summary()
+            command = terminal_command_name()
             return SetupSection(
                 "connectors",
                 f"{connector_summary['enabled_count']}_enabled",
                 "Slack, Teams, webhooks, MCP, browser, and Open WebUI adapters are tracked as local metadata; none can deliver externally without explicit future approval.",
-                ("aegisagent connectors", "aegisagent connectors doctor", "aegisagent connectors configure slack --token-env SLACK_BOT_TOKEN --enable"),
+                (f"{command} connectors", f"{command} connectors doctor", f"{command} connectors configure slack --token-env SLACK_BOT_TOKEN --enable"),
                 (
                     {"name": "external_delivery", "default": "ask", "external_delivery_performed": connector_summary["external_delivery_performed"]},
                     {"name": "browser_auto_launch", "ok": connector_summary["browser_auto_launch"]},
@@ -113,11 +124,12 @@ class SetupGuide:
             )
         if name == "memory":
             skills = SkillLoader([self.paths.skills_dir]).discover()
+            command = terminal_command_name()
             return SetupSection(
                 "memory",
                 "local",
                 "Workspace memory and skill discovery stay local unless a future connector is explicitly configured.",
-                ("aegisagent memory --index", "aegisagent skills", "/memory", "/skills"),
+                (f"{command} memory --index", f"{command} skills", "/memory", "/skills"),
                 ({"name": "skills_found", "count": len(skills)},),
             )
         raise KeyError(f"unknown setup section: {name}")
@@ -161,12 +173,13 @@ class SetupGuide:
 
 
 def format_setup_quickstart(payload: dict[str, Any]) -> str:
-    lines = [str(payload["title"]), f"workspace  {payload['workspace']}", "terminal   aegisagent tui", ""]
+    command = terminal_command_name()
+    lines = [str(payload["title"]), f"workspace  {payload['workspace']}", f"terminal   {command} tui", ""]
     for index, section in enumerate(payload["steps"], start=1):
         lines.append(f"{index}. {section['name']:<10} {section['status']:<18} {section['summary']}")
         if section["commands"]:
             lines.append(f"   next: {section['commands'][0]}")
-    lines.extend(["", "No browser is launched by setup. Run `aegisagent setup --run-checks` for metadata-only verification."])
+    lines.extend(["", f"No browser is launched by setup. Run `{command} setup --run-checks` for metadata-only verification."])
     return "\n".join(lines)
 
 

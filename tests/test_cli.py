@@ -93,6 +93,19 @@ class CliTests(unittest.TestCase):
         self.assertEqual(run_tui.call_args.kwargs["classic"], False)
         run_gateway.assert_not_called()
 
+    def test_activate_tty_launches_tui_not_gateway(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch("sys.stdin.isatty", return_value=True), patch("sys.stdout.isatty", return_value=True):
+                with patch("aegisagent.cli.run_textual_app", return_value=0) as run_tui:
+                    with patch("aegisagent.cli.run_gateway") as run_gateway:
+                        result = cli.main(["--workspace", tmp, "activate"])
+
+        self.assertEqual(result, 0)
+        self.assertEqual(run_tui.call_count, 1)
+        self.assertEqual(run_tui.call_args.args, ("command",))
+        self.assertEqual(run_tui.call_args.kwargs["classic"], False)
+        run_gateway.assert_not_called()
+
     def test_activate_command_is_terminal_first_non_tty_card(self):
         with tempfile.TemporaryDirectory() as tmp:
             result = run_cli("activate", cwd=tmp)
@@ -128,6 +141,15 @@ class CliTests(unittest.TestCase):
         self.assertIn("default     aegis-test -> terminal TUI", result.stdout)
         self.assertIn("fallback    aegis-test tui --print", result.stdout)
 
+    def test_setup_quickstart_uses_installed_command_name(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = run_cli("setup", "--quick", cwd=tmp, extra_env={"AEGIS_COMMAND_NAME": "aegis-test"})
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("terminal   aegis-test tui", result.stdout)
+        self.assertIn("aegis-test setup --run-checks", result.stdout)
+        self.assertIn("aegis-test model providers", result.stdout)
+
     def test_install_status_and_shim_are_terminal_only(self):
         with tempfile.TemporaryDirectory() as tmp:
             bin_dir = Path(tmp) / "bin"
@@ -138,7 +160,7 @@ class CliTests(unittest.TestCase):
             self.assertEqual(status_payload["title"], "AEGIS TERMINAL INSTALL")
             self.assertFalse(status_payload["installed"])
             self.assertFalse(status_payload["browser_auto_launch"])
-            self.assertIn("install shim --approved", status_payload["install_command"])
+            self.assertEqual(status_payload["install_command"], "aegis install shim --approved --name aegis")
 
             preview = run_cli("--json", "install", "shim", "--bin-dir", str(bin_dir), "--name", "aegis-test", cwd=tmp)
             self.assertEqual(preview.returncode, 1)
@@ -159,6 +181,42 @@ class CliTests(unittest.TestCase):
             audit = (Path(tmp) / ".aegisagent" / "audit.jsonl").read_text(encoding="utf-8")
             self.assertIn("lifecycle.install", audit)
             self.assertIn('"browser_auto_launch": false', audit)
+
+    def test_installed_shim_runs_activation_with_custom_command_name(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp) / "workspace"
+            workspace.mkdir()
+            (workspace / "src").symlink_to((Path.cwd() / "src").resolve(), target_is_directory=True)
+            bin_dir = Path(tmp) / "bin"
+            installed = run_cli("install", "shim", "--bin-dir", str(bin_dir), "--name", "aegis-test", "--approved", cwd=str(workspace))
+            self.assertEqual(installed.returncode, 0, installed.stderr)
+
+            shim = bin_dir / "aegis-test"
+            result = subprocess.run(
+                [str(shim), "activation"],
+                text=True,
+                capture_output=True,
+                check=False,
+                env={"AEGIS_PYTHON": sys.executable, "PYTHONPATH": "src"},
+            )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("primary     aegis-test tui", result.stdout)
+        self.assertIn("browser_auto_launch: false", result.stdout)
+        self.assertNotIn("gateway_started: true", result.stdout)
+
+    def test_install_shim_rejects_invalid_command_names_without_writing(self):
+        for name in ("bad/name", "bad name", "bad;name"):
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as tmp:
+                bin_dir = Path(tmp) / "bin"
+                result = run_cli("--json", "install", "shim", "--bin-dir", str(bin_dir), "--name", name, "--approved", cwd=tmp)
+
+                self.assertEqual(result.returncode, 1)
+                payload = json.loads(result.stdout)
+                self.assertEqual(payload["status"], "blocked")
+                self.assertFalse(payload["host_filesystem_mutation_performed"])
+                self.assertFalse(payload["browser_auto_launch"])
+                self.assertFalse(any(bin_dir.glob("*")) if bin_dir.exists() else False)
 
     def test_update_preview_is_github_pull_without_browser(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -256,6 +314,19 @@ class CliTests(unittest.TestCase):
             self.assertEqual(dirty_payload["status"], "blocked")
             self.assertIn("dirty checkout", dirty_payload["error"])
             self.assertFalse(dirty_payload["external_action_started"])
+
+    def test_update_approved_blocks_non_git_workspace_without_external_action(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = run_cli("--json", "update", "--approved", cwd=tmp)
+
+            self.assertEqual(result.returncode, 1)
+            payload = json.loads(result.stdout)
+            self.assertEqual(payload["status"], "blocked")
+            self.assertIn("checkout not found", payload["error"])
+            self.assertFalse(payload["external_action_started"])
+            self.assertFalse(payload["workspace_mutation_performed"])
+            audit = (Path(tmp) / ".aegisagent" / "audit.jsonl").read_text(encoding="utf-8")
+            self.assertIn("lifecycle.update", audit)
 
     def test_setup_health_audit(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -982,13 +1053,14 @@ class CliTests(unittest.TestCase):
 
     def test_capabilities_surface_shows_terminal_parity_and_gaps(self):
         with tempfile.TemporaryDirectory() as tmp:
-            status = run_cli("capabilities", cwd=tmp)
+            status = run_cli("capabilities", cwd=tmp, extra_env={"AEGIS_COMMAND_NAME": "aegis-test"})
             self.assertEqual(status.returncode, 0, status.stderr)
             self.assertIn("AEGIS CAPABILITY MAP", status.stdout)
             self.assertIn("Terminal activation", status.stdout)
             self.assertIn("Agents and subagents", status.stdout)
             self.assertIn("terminal_first=true", status.stdout)
             self.assertIn("browser_auto_launch=false", status.stdout)
+            self.assertIn("aegis-test tui", status.stdout)
 
             gaps = run_cli("capabilities", "--gaps", cwd=tmp)
             self.assertEqual(gaps.returncode, 0, gaps.stderr)
@@ -1006,15 +1078,15 @@ class CliTests(unittest.TestCase):
 
     def test_dashboard_is_terminal_first_operator_surface(self):
         with tempfile.TemporaryDirectory() as tmp:
-            status = run_cli("dashboard", cwd=tmp)
+            status = run_cli("dashboard", cwd=tmp, extra_env={"AEGIS_COMMAND_NAME": "aegis-test"})
             self.assertEqual(status.returncode, 0, status.stderr)
             self.assertIn("AEGIS TERMINAL DASHBOARD", status.stdout)
-            self.assertIn("activate    aegisagent tui", status.stdout)
+            self.assertIn("activate    aegis-test tui", status.stdout)
             self.assertIn("browser_auto_launch=false", status.stdout)
             self.assertIn("gateway_started=false", status.stdout)
             self.assertIn("Agents and subagents", status.stdout)
 
-            payload_result = run_cli("--json", "dashboard", cwd=tmp)
+            payload_result = run_cli("--json", "dashboard", cwd=tmp, extra_env={"AEGIS_COMMAND_NAME": "aegis-test"})
             self.assertEqual(payload_result.returncode, 0, payload_result.stderr)
             payload = json.loads(payload_result.stdout)
             self.assertEqual(payload["title"], "AEGIS TERMINAL DASHBOARD")
@@ -1022,7 +1094,7 @@ class CliTests(unittest.TestCase):
             self.assertFalse(payload["browser_auto_launch"])
             self.assertFalse(payload["gateway_started"])
             self.assertTrue(payload["metadata_only"])
-            self.assertEqual(payload["activation"]["primary_command"], "aegisagent tui")
+            self.assertEqual(payload["activation"]["primary_command"], "aegis-test tui")
             self.assertIn("contract_version", payload["agents"])
 
     def test_automations_are_durable_gated_records(self):

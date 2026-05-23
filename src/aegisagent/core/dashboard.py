@@ -12,6 +12,7 @@ from aegisagent.core.connectors import ConnectorStore
 from aegisagent.core.improvement import ImprovementStore
 from aegisagent.core.provider_config import ProviderStore, ProviderUsageStore
 from aegisagent.core.sessions import SessionStore
+from aegisagent.core.setup_flow import terminal_command_name
 from aegisagent.core.subagents import BackgroundJobStore, SubagentStore, agent_contracts_payload
 from aegisagent.core.tasks import TaskStore
 from aegisagent.core.tools import enabled_counts
@@ -37,6 +38,7 @@ def dashboard_payload(paths: RuntimePaths) -> dict[str, Any]:
     browser_sessions = BrowserSessionStore(paths).list(limit=1000)
     usage = ProviderUsageStore(paths).summary(limit=5)
     gap_rows = capabilities["gaps"]
+    command = terminal_command_name()
     return {
         "title": "AEGIS TERMINAL DASHBOARD",
         "version": __version__,
@@ -96,7 +98,7 @@ def dashboard_payload(paths: RuntimePaths) -> dict[str, Any]:
             "limits": contracts["limits"],
         },
         "next": [
-            "Run `aegisagent tui` for the prompt-first terminal UI.",
+            f"Run `{command}` or `{command} tui` for the prompt-first terminal UI.",
             "Run `/agents contracts` before delegating multi-agent work.",
             "Run `/gaps` to continue closing Hermes-class gaps.",
             "Use `/web` only when you explicitly want optional browser instructions.",

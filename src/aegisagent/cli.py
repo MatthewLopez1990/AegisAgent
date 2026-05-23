@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
+from pathlib import Path
 from pathlib import Path
 
 from aegisagent import __version__
@@ -48,7 +50,15 @@ from aegisagent.tui.textual_app import run_textual_app
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="aegisagent", description="Security-first autonomous agent console.")
+    prog = "aegisagent"
+    if sys.argv:
+        invoked = Path(sys.argv[0]).name
+        if invoked in {"aegis", "aegisagent"}:
+            prog = invoked
+    env_command = os.environ.get("AEGIS_COMMAND_NAME", "").strip()
+    if env_command:
+        prog = env_command
+    parser = argparse.ArgumentParser(prog=prog, description="Security-first autonomous agent console.")
     parser.add_argument("--workspace", default=None, help="Workspace root. Defaults to current directory.")
     parser.add_argument("--json", action="store_true", help="Emit JSON where supported.")
     sub = parser.add_subparsers(dest="command")
@@ -215,7 +225,7 @@ def build_parser() -> argparse.ArgumentParser:
     agents.add_argument("--json", action="store_true", help="Emit JSON for status and profiles.")
 
     tui = sub.add_parser("tui", help="Launch governed terminal TUI. This is the primary activation path.")
-    tui.add_argument("--view", choices=["command", "setup", "tools", "activation"], default="command")
+    tui.add_argument("--view", choices=["command", "setup", "tools", "activation", "help"], default="command")
     tui.add_argument("--print", action="store_true", help="Print a static terminal frame instead of launching the interactive TUI.")
     tui.add_argument("--classic", action="store_true", help="Use the static fallback instead of the curses terminal UI.")
     tui.add_argument("--width", type=int, default=None)

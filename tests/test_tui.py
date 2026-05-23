@@ -52,12 +52,84 @@ class TuiRendererTests(unittest.TestCase):
         for view, width, height, marker in [
             ("setup", 100, 32, "AEGIS SETUP"),
             ("tools", 132, 38, "AEGIS CONTROL"),
+            ("help", 100, 32, "AEGIS HELP"),
         ]:
             output = render(TuiState(view=view), width=width, height=height)
             lines = output.splitlines()
             self.assertLessEqual(len(lines), height)
             self.assertTrue(all(len(line) <= width for line in lines))
             self.assertIn(marker, output)
+
+    def test_all_static_views_fit_80_120_200_reference_sizes(self):
+        markers = {
+            "command": "aegis>",
+            "setup": "setup>",
+            "tools": "aegis>",
+            "activation": "aegis>",
+            "help": "aegis>",
+        }
+        for view in ("command", "setup", "tools", "activation", "help"):
+            for width, height in ((80, 24), (120, 40), (200, 60)):
+                with self.subTest(view=view, width=width, height=height):
+                    output = render(TuiState(view=view), width=width, height=height)
+                    lines = output.splitlines()
+                    self.assertLessEqual(len(lines), height)
+                    self.assertTrue(all(len(line) <= width for line in lines))
+                    self.assertNotIn("at least 80x24", output)
+                    self.assertIn(markers[view], output)
+
+    def test_static_setup_and_tools_match_reference_affordances(self):
+        setup = render(TuiState(view="setup"), width=100, height=32)
+        self.assertIn("connect secrets vault", setup)
+        self.assertIn("macOS Keychain", setup)
+        self.assertIn("1Password CLI", setup)
+        self.assertIn("environment file", setup)
+        self.assertIn("enterprise gateway", setup)
+        self.assertIn("security preview", setup)
+
+        tools = render(TuiState(view="tools"), width=132, height=38)
+        self.assertIn("policy inspector", tools)
+        self.assertIn("recent receipts", tools)
+        self.assertIn("filesystem", tools)
+        self.assertIn("subagents", tools)
+
+    def test_tools_panel_policy_commands_have_inspectors(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = runtime_paths(tmp)
+            panels = build_interactive_panels(paths, active_menu="tools")
+            tools = next(panel for panel in panels if panel.panel_id == "focus")
+            for item in tools.items:
+                with self.subTest(command=item.command):
+                    output = io.StringIO()
+                    with contextlib.redirect_stdout(output):
+                        result = dispatch_interactive_command(item.command, paths)
+                    if item.command == "/policy shell":
+                        self.assertIn(result, {"allow", "ask", "deny"})
+                        self.assertIn('"tool": "shell"', output.getvalue())
+                    else:
+                        self.assertEqual(result, "policy")
+                        self.assertIn("AEGIS POLICY INSPECTOR", output.getvalue())
+                        self.assertIn(item.label, output.getvalue())
+
+    def test_static_help_view_exposes_keyboard_model(self):
+        output = render(TuiState(view="help"), width=100, height=32)
+        self.assertIn("AEGIS HELP", output)
+        self.assertIn("Enter", output)
+        self.assertIn("Tab / Shift+Tab", output)
+        self.assertIn("/setup run-checks", output)
+        self.assertIn("/agents bg <task>", output)
+
+    def test_interactive_dispatch_help_lists_keyboard_controls(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            printed = io.StringIO()
+            with contextlib.redirect_stdout(printed):
+                result = dispatch_interactive_command("/help", runtime_paths(tmp))
+
+        output = printed.getvalue()
+        self.assertEqual(result, "help")
+        for marker in ("Enter", "Tab", "Arrow keys", "Esc", "q", "/exit", "/commands", "/install", "/update"):
+            self.assertIn(marker, output)
+        self.assertIn("Web is optional", output)
 
     def test_interactive_panel_model_has_terminal_agent_controls(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -279,7 +351,7 @@ class TuiRendererTests(unittest.TestCase):
 
             self.assertEqual(result, "setup")
             self.assertIn("AEGIS SETUP :: model", setup_model.getvalue())
-            self.assertIn("aegisagent model configure", setup_model.getvalue())
+            self.assertIn("aegis model configure", setup_model.getvalue())
 
             setup_sandbox = io.StringIO()
             with contextlib.redirect_stdout(setup_sandbox):
