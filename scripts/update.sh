@@ -16,6 +16,23 @@ validate_branch() {
   esac
 }
 
+canonical_repo_url() {
+  case "$1" in
+    git@github.com:*)
+      printf 'https://github.com/%s\n' "${1#git@github.com:}"
+      ;;
+    ssh://git@github.com/*)
+      printf 'https://github.com/%s\n' "${1#ssh://git@github.com/}"
+      ;;
+    */)
+      printf '%s\n' "${1%/}"
+      ;;
+    *)
+      printf '%s\n' "$1"
+      ;;
+  esac
+}
+
 if [ ! -d "$INSTALL_DIR/.git" ]; then
   echo "AegisAgent checkout not found at $INSTALL_DIR" >&2
   echo "Install first with scripts/install.sh or the README one-line installer." >&2
@@ -25,7 +42,9 @@ fi
 validate_branch
 
 current_url="$(git -C "$INSTALL_DIR" remote get-url origin 2>/dev/null || true)"
-if [ "$current_url" != "$REPO_URL" ]; then
+current_canonical="$(canonical_repo_url "$current_url")"
+expected_canonical="$(canonical_repo_url "$REPO_URL")"
+if [ "$current_canonical" != "$expected_canonical" ]; then
   echo "refusing to update $INSTALL_DIR because origin is not $REPO_URL" >&2
   echo "current origin: ${current_url:-missing}" >&2
   exit 1

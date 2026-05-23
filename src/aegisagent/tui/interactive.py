@@ -991,7 +991,7 @@ def dispatch_interactive_command(command: str, paths: RuntimePaths) -> str:
         remote_name = tokens[0] if tokens else "origin"
         branch_name = tokens[1] if len(tokens) > 1 else "main"
         result = update_from_github(paths, remote=remote_name, branch=branch_name, approved=approved)
-        _print_workspace_tool(result, audit, paths)
+        _print_workspace_tool(result, audit, paths, display_content=format_update_status(result))
         return "update"
     if command.startswith("/clear"):
         print("Visible output cleared. Session transcripts and audit receipts were not modified.")
@@ -1832,7 +1832,8 @@ def print_json(payload: dict) -> None:
     print(json.dumps(payload, indent=2, sort_keys=True))
 
 
-def _print_workspace_tool(result: WorkspaceToolResult, audit: AuditLog, paths: RuntimePaths) -> None:
+def _print_workspace_tool(result: WorkspaceToolResult, audit: AuditLog, paths: RuntimePaths, *, display_content: str | None = None) -> None:
+    content = display_content if display_content is not None else result.content
     receipt = audit.append(
         "tui.tool.completed",
         {
@@ -1843,11 +1844,11 @@ def _print_workspace_tool(result: WorkspaceToolResult, audit: AuditLog, paths: R
             "browser_auto_launch": result.metadata.get("browser_auto_launch", False),
         },
     )
-    print(result.content)
+    print(content)
     print(f"audit receipt: {receipt['id']}")
     SessionStore(paths).append(
         "main",
         "tool",
-        result.content,
+        content,
         metadata={"source": "tui", "tool": result.name, "receipt_id": receipt["id"], **result.metadata},
     )

@@ -306,8 +306,9 @@ class TerminalAgentSessionTests(unittest.TestCase):
             subprocess.run(["git", "checkout", "-B", "main"], cwd=seed, text=True, capture_output=True, check=True)
             subprocess.run(["git", "config", "user.name", "Aegis Test"], cwd=seed, text=True, capture_output=True, check=True)
             subprocess.run(["git", "config", "user.email", "aegis@example.invalid"], cwd=seed, text=True, capture_output=True, check=True)
+            (seed / ".gitignore").write_text(".aegisagent/\n", encoding="utf-8")
             (seed / "note.txt").write_text("v1\n", encoding="utf-8")
-            subprocess.run(["git", "add", "note.txt"], cwd=seed, text=True, capture_output=True, check=True)
+            subprocess.run(["git", "add", ".gitignore", "note.txt"], cwd=seed, text=True, capture_output=True, check=True)
             subprocess.run(["git", "commit", "-m", "Initial"], cwd=seed, text=True, capture_output=True, check=True)
             subprocess.run(["git", "init", "--bare", str(remote)], text=True, capture_output=True, check=True)
             subprocess.run(["git", "remote", "add", "origin", str(remote)], cwd=seed, text=True, capture_output=True, check=True)
@@ -340,7 +341,8 @@ class TerminalAgentSessionTests(unittest.TestCase):
             self.assertEqual(preview_update.status, "needs_approval")
             self.assertEqual((paths.workspace / "note.txt").read_text(encoding="utf-8"), "v1\n")
 
-            updated = update_from_github(paths, remote="origin", branch="main", approved=True)
+            with patch.dict(os.environ, {"AEGIS_REPO_URL": str(remote.resolve())}):
+                updated = update_from_github(paths, remote="origin", branch="main", approved=True)
             self.assertEqual(updated.status, "ok")
             self.assertEqual((paths.workspace / "note.txt").read_text(encoding="utf-8"), "v2\n")
             self.assertTrue(updated.metadata["workspace_mutation_performed"])

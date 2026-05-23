@@ -4,6 +4,7 @@ import json
 import os
 import re
 import stat
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -12,6 +13,7 @@ from aegisagent.core.workspace_tools import WorkspaceToolResult, WorkspaceToolRu
 
 
 _COMMAND_NAME_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+DEFAULT_REPO_URL = "https://github.com/MatthewLopez1990/AegisAgent.git"
 
 
 def install_terminal_shim(paths: RuntimePaths, *, bin_dir: str = "", name: str = "aegis", approved: bool = False) -> WorkspaceToolResult:
@@ -95,12 +97,14 @@ def install_status_payload(paths: RuntimePaths, *, bin_dir: str = "", name: str 
 def update_from_github(paths: RuntimePaths, *, remote: str = "origin", branch: str = "main", approved: bool = False) -> WorkspaceToolResult:
     clean_remote = remote.strip() or "origin"
     clean_branch = branch.strip() or "main"
+    expected_repo_url = os.environ.get("AEGIS_REPO_URL", DEFAULT_REPO_URL).strip() or DEFAULT_REPO_URL
     preview = {
         "title": "AEGIS TERMINAL UPDATE",
         "platform": "macOS/Linux shell",
         "workspace": str(paths.workspace),
         "remote": clean_remote,
         "branch": clean_branch,
+        "repo_url": expected_repo_url,
         "update_command": f"aegis update --approved --remote {clean_remote} --branch {clean_branch}",
         "git_command": f"git pull --ff-only {clean_remote} {clean_branch}",
         "status": "needs_approval" if not approved else "running",
@@ -119,6 +123,7 @@ def update_from_github(paths: RuntimePaths, *, remote: str = "origin", branch: s
             metadata={
                 "remote": clean_remote,
                 "branch": clean_branch,
+                "repo_url": expected_repo_url,
                 "approved": False,
                 "external_action_started": False,
                 "browser_auto_launch": False,
@@ -126,16 +131,24 @@ def update_from_github(paths: RuntimePaths, *, remote: str = "origin", branch: s
                 "workspace_mutation_performed": False,
             },
         )
+    guard = _update_preflight(paths, remote=clean_remote, branch=clean_branch, expected_repo_url=expected_repo_url)
+    if guard is not None:
+        return guard
     result = WorkspaceToolRunner(paths).git_remote("pull", clean_remote, clean_branch, approved=True)
     payload = json.loads(result.content)
     payload.update(
         {
             "title": "AEGIS TERMINAL UPDATE",
             "status": result.status,
+            "workspace": str(paths.workspace),
+            "repo_url": expected_repo_url,
             "update_command": f"aegis update --approved --remote {clean_remote} --branch {clean_branch}",
             "git_command": f"git pull --ff-only {clean_remote} {clean_branch}",
             "browser_auto_launch": False,
             "gateway_started": False,
+            "external_action_started": result.metadata.get("external_action_started", False),
+            "workspace_mutation_performed": result.metadata.get("workspace_mutation_performed", False),
+            "network_capable_git_operation": result.metadata.get("network_capable_git_operation", True),
         }
     )
     metadata = {
@@ -217,6 +230,126 @@ def _install_result(status: str, payload: dict[str, Any]) -> WorkspaceToolResult
             "browser_auto_launch": False,
         },
     )
+
+
+def _update_preflight(paths: RuntimePaths, *, remote: str, branch: str, expected_repo_url: str) -> WorkspaceToolResult | None:
+    if not (paths.workspace / ".git").exists():
+        return _blocked_update_result(
+            paths,
+            remote=remote,
+            branch=branch,
+            expected_repo_url=expected_repo_url,
+            error=f"AegisAgent checkout not found at {paths.workspace}",
+        )
+
+    remote_url = _git_stdout(paths.workspace, ["remote", "get-url", remote])
+    if remote_url is None:
+        return _blocked_update_result(
+            paths,
+            remote=remote,
+            branch=branch,
+            expected_repo_url=expected_repo_url,
+            error=f"git remote {remote} is not configured",
+        )
+
+    if _canonical_repo_url(remote_url) != _canonical_repo_url(expected_repo_url):
+        return _blocked_update_result(
+            paths,
+            remote=remote,
+            branch=branch,
+            expected_repo_url=expected_repo_url,
+            error=f"refusing to update because {remote} is {remote_url}, expected {expected_repo_url}",
+            current_repo_url=remote_url,
+        )
+
+    dirty = _git_stdout(paths.workspace, ["status", "--porcelain"])
+    if dirty is None:
+        return _blocked_update_result(
+            paths,
+            remote=remote,
+            branch=branch,
+            expected_repo_url=expected_repo_url,
+            error="git status failed for this checkout",
+            current_repo_url=remote_url,
+        )
+    if dirty.strip():
+        return _blocked_update_result(
+            paths,
+            remote=remote,
+            branch=branch,
+            expected_repo_url=expected_repo_url,
+            error=f"refusing to update dirty checkout at {paths.workspace}",
+            current_repo_url=remote_url,
+        )
+
+    return None
+
+
+def _blocked_update_result(
+    paths: RuntimePaths,
+    *,
+    remote: str,
+    branch: str,
+    expected_repo_url: str,
+    error: str,
+    current_repo_url: str = "",
+) -> WorkspaceToolResult:
+    payload = {
+        "title": "AEGIS TERMINAL UPDATE",
+        "platform": "macOS/Linux shell",
+        "status": "blocked",
+        "workspace": str(paths.workspace),
+        "remote": remote,
+        "branch": branch,
+        "repo_url": expected_repo_url,
+        "current_repo_url": current_repo_url,
+        "error": error,
+        "update_command": f"aegis update --approved --remote {remote} --branch {branch}",
+        "git_command": f"git pull --ff-only {remote} {branch}",
+        "next": "fix the checkout state, then rerun the approved update",
+        "browser_auto_launch": False,
+        "gateway_started": False,
+        "external_action_started": False,
+        "network_capable_git_operation": True,
+        "workspace_mutation_performed": False,
+    }
+    return WorkspaceToolResult(
+        name="lifecycle.update",
+        status="blocked",
+        content=json.dumps(payload, indent=2),
+        metadata={
+            "remote": remote,
+            "branch": branch,
+            "repo_url": expected_repo_url,
+            "current_repo_url": current_repo_url,
+            "approved": True,
+            "external_action_started": False,
+            "browser_auto_launch": False,
+            "network_capable_git_operation": True,
+            "workspace_mutation_performed": False,
+        },
+    )
+
+
+def _git_stdout(workspace: Path, args: list[str]) -> str | None:
+    try:
+        result = subprocess.run(["git", *args], cwd=workspace, text=True, capture_output=True, check=False)
+    except OSError:
+        return None
+    if result.returncode != 0:
+        return None
+    return result.stdout.strip()
+
+
+def _canonical_repo_url(url: str) -> str:
+    cleaned = url.strip().rstrip("/")
+    if cleaned.startswith("git@github.com:"):
+        return f"https://github.com/{cleaned[len('git@github.com:') :]}"
+    if cleaned.startswith("ssh://git@github.com/"):
+        return f"https://github.com/{cleaned[len('ssh://git@github.com/') :]}"
+    if "://" not in cleaned:
+        return str(Path(cleaned).expanduser().resolve())
+    return cleaned
 
 
 def _safety_metadata(*, approved: bool, mutation: bool) -> dict[str, Any]:

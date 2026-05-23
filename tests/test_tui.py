@@ -754,8 +754,9 @@ class TuiRendererTests(unittest.TestCase):
             subprocess.run(["git", "checkout", "-B", "main"], cwd=seed, text=True, capture_output=True, check=True)
             subprocess.run(["git", "config", "user.name", "Aegis Test"], cwd=seed, text=True, capture_output=True, check=True)
             subprocess.run(["git", "config", "user.email", "aegis@example.invalid"], cwd=seed, text=True, capture_output=True, check=True)
+            (seed / ".gitignore").write_text(".aegisagent/\n", encoding="utf-8")
             (seed / "note.txt").write_text("v1\n", encoding="utf-8")
-            subprocess.run(["git", "add", "note.txt"], cwd=seed, text=True, capture_output=True, check=True)
+            subprocess.run(["git", "add", ".gitignore", "note.txt"], cwd=seed, text=True, capture_output=True, check=True)
             subprocess.run(["git", "commit", "-m", "Initial"], cwd=seed, text=True, capture_output=True, check=True)
             subprocess.run(["git", "init", "--bare", str(remote)], text=True, capture_output=True, check=True)
             subprocess.run(["git", "remote", "add", "origin", str(remote)], cwd=seed, text=True, capture_output=True, check=True)
@@ -997,8 +998,9 @@ class TuiRendererTests(unittest.TestCase):
             subprocess.run(["git", "checkout", "-B", "main"], cwd=seed, text=True, capture_output=True, check=True)
             subprocess.run(["git", "config", "user.name", "Aegis Test"], cwd=seed, text=True, capture_output=True, check=True)
             subprocess.run(["git", "config", "user.email", "aegis@example.invalid"], cwd=seed, text=True, capture_output=True, check=True)
+            (seed / ".gitignore").write_text(".aegisagent/\n", encoding="utf-8")
             (seed / "note.txt").write_text("v1\n", encoding="utf-8")
-            subprocess.run(["git", "add", "note.txt"], cwd=seed, text=True, capture_output=True, check=True)
+            subprocess.run(["git", "add", ".gitignore", "note.txt"], cwd=seed, text=True, capture_output=True, check=True)
             subprocess.run(["git", "commit", "-m", "Initial"], cwd=seed, text=True, capture_output=True, check=True)
             subprocess.run(["git", "init", "--bare", str(remote)], text=True, capture_output=True, check=True)
             subprocess.run(["git", "remote", "add", "origin", str(remote)], cwd=seed, text=True, capture_output=True, check=True)
@@ -1011,11 +1013,13 @@ class TuiRendererTests(unittest.TestCase):
             subprocess.run(["git", "push", "origin", "main"], cwd=seed, text=True, capture_output=True, check=True)
 
             output = io.StringIO()
-            with contextlib.redirect_stdout(output):
+            with patch.dict(os.environ, {"AEGIS_REPO_URL": str(remote.resolve())}), contextlib.redirect_stdout(output):
                 result = dispatch_interactive_command("/update origin main | approve", paths)
 
             self.assertEqual(result, "update")
             self.assertEqual((workspace / "note.txt").read_text(encoding="utf-8"), "v2\n")
+            self.assertIn(f"workspace   {workspace.resolve()}", output.getvalue())
+            self.assertIn("external_action_started: true", output.getvalue())
             audit = (paths.state_dir / "audit.jsonl").read_text(encoding="utf-8")
             self.assertIn("lifecycle.update", audit)
             self.assertIn('"workspace_mutation_performed": true', audit)

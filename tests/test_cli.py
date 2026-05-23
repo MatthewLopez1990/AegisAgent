@@ -51,11 +51,13 @@ class CliTests(unittest.TestCase):
         self.assertIn("git -C \"$INSTALL_DIR\" pull --ff-only origin \"$BRANCH\"", install_text)
         self.assertIn("remote get-url origin", install_text)
         self.assertIn("status --porcelain", install_text)
+        self.assertIn("canonical_repo_url", install_text)
         self.assertIn("invalid AEGIS_BRANCH", install_text)
         self.assertIn("python3 -m aegisagent install shim --approved", install_text)
         self.assertIn("git -C \"$INSTALL_DIR\" pull --ff-only origin \"$BRANCH\"", update_text)
         self.assertIn("remote get-url origin", update_text)
         self.assertIn("status --porcelain", update_text)
+        self.assertIn("canonical_repo_url", update_text)
         self.assertIn("invalid AEGIS_BRANCH", update_text)
         self.assertIn("python3 -m aegisagent install shim --approved", update_text)
         self.assertNotIn("open ", install_text)
@@ -171,8 +173,9 @@ class CliTests(unittest.TestCase):
             subprocess.run(["git", "checkout", "-B", "main"], cwd=seed, text=True, capture_output=True, check=True)
             subprocess.run(["git", "config", "user.name", "Aegis Test"], cwd=seed, text=True, capture_output=True, check=True)
             subprocess.run(["git", "config", "user.email", "aegis@example.invalid"], cwd=seed, text=True, capture_output=True, check=True)
+            (seed / ".gitignore").write_text(".aegisagent/\n", encoding="utf-8")
             (seed / "note.txt").write_text("v1\n", encoding="utf-8")
-            subprocess.run(["git", "add", "note.txt"], cwd=seed, text=True, capture_output=True, check=True)
+            subprocess.run(["git", "add", ".gitignore", "note.txt"], cwd=seed, text=True, capture_output=True, check=True)
             subprocess.run(["git", "commit", "-m", "Initial"], cwd=seed, text=True, capture_output=True, check=True)
             subprocess.run(["git", "init", "--bare", str(remote)], text=True, capture_output=True, check=True)
             subprocess.run(["git", "remote", "add", "origin", str(remote)], cwd=seed, text=True, capture_output=True, check=True)
@@ -183,17 +186,66 @@ class CliTests(unittest.TestCase):
             subprocess.run(["git", "commit", "-m", "Update"], cwd=seed, text=True, capture_output=True, check=True)
             subprocess.run(["git", "push", "origin", "main"], cwd=seed, text=True, capture_output=True, check=True)
 
-            updated = run_cli("--json", "update", "--remote", "origin", "--branch", "main", "--approved", cwd=str(workspace))
+            updated = run_cli(
+                "--json",
+                "update",
+                "--remote",
+                "origin",
+                "--branch",
+                "main",
+                "--approved",
+                cwd=str(workspace),
+                extra_env={"AEGIS_REPO_URL": str(remote.resolve())},
+            )
 
             self.assertEqual(updated.returncode, 0, updated.stderr)
             payload = json.loads(updated.stdout)
             self.assertEqual(payload["status"], "ok")
+            self.assertEqual(payload["workspace"], str(workspace.resolve()))
+            self.assertTrue(payload["external_action_started"])
+            self.assertTrue(payload["workspace_mutation_performed"])
             self.assertEqual((workspace / "note.txt").read_text(encoding="utf-8"), "v2\n")
             audit = (workspace / ".aegisagent" / "audit.jsonl").read_text(encoding="utf-8")
             self.assertIn("lifecycle.update", audit)
             self.assertIn('"workspace_mutation_performed": true', audit)
             self.assertIn('"external_action_started": true', audit)
             self.assertIn('"browser_auto_launch": false', audit)
+
+    def test_update_approved_refuses_wrong_origin_and_dirty_checkout(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            seed = Path(tmp) / "seed"
+            remote = Path(tmp) / "remote.git"
+            workspace = Path(tmp) / "work"
+            seed.mkdir()
+            subprocess.run(["git", "init"], cwd=seed, text=True, capture_output=True, check=True)
+            subprocess.run(["git", "checkout", "-B", "main"], cwd=seed, text=True, capture_output=True, check=True)
+            subprocess.run(["git", "config", "user.name", "Aegis Test"], cwd=seed, text=True, capture_output=True, check=True)
+            subprocess.run(["git", "config", "user.email", "aegis@example.invalid"], cwd=seed, text=True, capture_output=True, check=True)
+            (seed / ".gitignore").write_text(".aegisagent/\n", encoding="utf-8")
+            (seed / "note.txt").write_text("v1\n", encoding="utf-8")
+            subprocess.run(["git", "add", ".gitignore", "note.txt"], cwd=seed, text=True, capture_output=True, check=True)
+            subprocess.run(["git", "commit", "-m", "Initial"], cwd=seed, text=True, capture_output=True, check=True)
+            subprocess.run(["git", "init", "--bare", str(remote)], text=True, capture_output=True, check=True)
+            subprocess.run(["git", "remote", "add", "origin", str(remote)], cwd=seed, text=True, capture_output=True, check=True)
+            subprocess.run(["git", "push", "origin", "main"], cwd=seed, text=True, capture_output=True, check=True)
+            subprocess.run(["git", "clone", str(remote), str(workspace)], text=True, capture_output=True, check=True)
+
+            wrong_origin = run_cli("--json", "update", "--approved", cwd=str(workspace))
+
+            self.assertEqual(wrong_origin.returncode, 1)
+            wrong_payload = json.loads(wrong_origin.stdout)
+            self.assertEqual(wrong_payload["status"], "blocked")
+            self.assertIn("refusing to update", wrong_payload["error"])
+            self.assertFalse(wrong_payload["external_action_started"])
+
+            (workspace / "dirty.txt").write_text("dirty\n", encoding="utf-8")
+            dirty = run_cli("--json", "update", "--approved", cwd=str(workspace), extra_env={"AEGIS_REPO_URL": str(remote.resolve())})
+
+            self.assertEqual(dirty.returncode, 1)
+            dirty_payload = json.loads(dirty.stdout)
+            self.assertEqual(dirty_payload["status"], "blocked")
+            self.assertIn("dirty checkout", dirty_payload["error"])
+            self.assertFalse(dirty_payload["external_action_started"])
 
     def test_setup_health_audit(self):
         with tempfile.TemporaryDirectory() as tmp:
