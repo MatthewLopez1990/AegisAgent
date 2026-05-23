@@ -7,7 +7,9 @@
     "dev": "vite --host 127.0.0.1",
     "build": "vite build",
     "preview": "vite preview --host 127.0.0.1",
-    "smoke": "node scripts/smoke.mjs"
+    "smoke": "node scripts/smoke.mjs",
+    "test": "npm run smoke",
+    "verify": "npm run build && npm run smoke"
   },
   "dependencies": {
     "@vitejs/plugin-react": "^5.1.1",

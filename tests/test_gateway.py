@@ -47,6 +47,14 @@ class GatewayTests(unittest.TestCase):
             TaskRunner(paths).submit("summarize gateway parity", source="test")
             client = TestClient(app_factory(tmp))
 
+            tools = client.get("/tools")
+            self.assertEqual(tools.status_code, 200)
+            tool_payload = tools.json()
+            self.assertTrue(any(tool["name"] == "filesystem" for tool in tool_payload))
+            for tool in tool_payload:
+                for field in ("name", "status", "scope", "approval", "risk", "description"):
+                    self.assertIn(field, tool)
+
             dashboard = client.get("/dashboard")
             self.assertEqual(dashboard.status_code, 200)
             dashboard_payload = dashboard.json()
@@ -76,7 +84,7 @@ class GatewayTests(unittest.TestCase):
                 ("/audit", "ok"),
                 ("/model/providers", "active_provider"),
                 ("/model/doctor", "checks"),
-                ("/model/usage", "records"),
+                ("/model/usage", "recent"),
                 ("/sessions", "sessions"),
                 ("/automations", "automations"),
                 ("/improvements", "proposals"),

@@ -16,7 +16,7 @@ dependencies = []
 gateway = ["fastapi>=0.115", "uvicorn[standard]>=0.32"]
 tui = ["textual>=1.0"]
 web = ["fastapi>=0.115", "uvicorn[standard]>=0.32"]
-dev = ["pytest>=8.0"]
+dev = ["pytest>=8.0", "httpx>=0.28"]
 
 [project.scripts]
 aegisagent = "aegisagent.cli:main"
