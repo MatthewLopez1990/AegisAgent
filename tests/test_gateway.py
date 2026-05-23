@@ -3,6 +3,8 @@ from __future__ import annotations
 import tempfile
 import unittest
 
+from aegisagent.config import runtime_paths
+from aegisagent.core.tasks import TaskRunner
 from aegisagent.gateway import app_factory
 
 try:
@@ -38,6 +40,55 @@ class GatewayTests(unittest.TestCase):
 
             missing = client.get("/setup/nope")
             self.assertEqual(missing.status_code, 404)
+
+    def test_read_only_terminal_parity_routes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = runtime_paths(tmp)
+            TaskRunner(paths).submit("summarize gateway parity", source="test")
+            client = TestClient(app_factory(tmp))
+
+            dashboard = client.get("/dashboard")
+            self.assertEqual(dashboard.status_code, 200)
+            dashboard_payload = dashboard.json()
+            self.assertEqual(dashboard_payload["title"], "AEGIS TERMINAL DASHBOARD")
+            self.assertTrue(dashboard_payload["terminal_first"])
+            self.assertFalse(dashboard_payload["browser_auto_launch"])
+
+            capabilities = client.get("/capabilities")
+            self.assertEqual(capabilities.status_code, 200)
+            capability_payload = capabilities.json()
+            self.assertEqual(capability_payload["title"], "AEGIS CAPABILITY MAP")
+            self.assertIn("counts", capability_payload)
+
+            gaps = client.get("/capabilities/gaps")
+            self.assertEqual(gaps.status_code, 200)
+            gap_payload = gaps.json()
+            self.assertEqual(gap_payload["title"], "AEGIS CAPABILITY GAPS")
+            self.assertTrue(all(row["status"] != "ready" for row in gap_payload["capabilities"]))
+
+            tasks = client.get("/tasks")
+            self.assertEqual(tasks.status_code, 200)
+            task_payload = tasks.json()
+            self.assertEqual(task_payload["task_count"], 1)
+            self.assertFalse(task_payload["external_action_started"])
+
+            for route, marker in [
+                ("/audit", "ok"),
+                ("/model/providers", "active_provider"),
+                ("/model/doctor", "checks"),
+                ("/model/usage", "records"),
+                ("/sessions", "sessions"),
+                ("/automations", "automations"),
+                ("/improvements", "proposals"),
+                ("/agents/status", "profiles"),
+                ("/agents/contracts", "profiles"),
+                ("/subagents", "subagents"),
+                ("/subagents/jobs", "jobs"),
+                ("/browser/sessions", "sessions"),
+            ]:
+                response = client.get(route)
+                self.assertEqual(response.status_code, 200, route)
+                self.assertIn(marker, response.json(), route)
 
 
 if __name__ == "__main__":
