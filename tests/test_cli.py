@@ -147,8 +147,39 @@ class CliTests(unittest.TestCase):
 
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("terminal   aegis-test tui", result.stdout)
+        self.assertIn("start here aegis-test setup next", result.stdout)
+        self.assertIn("opens      aegis-test setup model", result.stdout)
         self.assertIn("aegis-test setup --run-checks", result.stdout)
         self.assertIn("aegis-test model providers", result.stdout)
+        self.assertIn("No browser is launched by setup", result.stdout)
+
+    def test_setup_next_returns_priority_step_state_without_browser(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            text = run_cli("setup", "next", cwd=tmp, extra_env={"AEGIS_COMMAND_NAME": "aegis-test"})
+            payload_result = run_cli("--json", "setup", "next", cwd=tmp, extra_env={"AEGIS_COMMAND_NAME": "aegis-test"})
+
+        self.assertEqual(text.returncode, 0, text.stderr)
+        self.assertIn("AEGIS SETUP :: next", text.stdout)
+        self.assertIn("command    aegis-test setup model", text.stdout)
+        self.assertIn("tui        /setup model", text.stdout)
+        self.assertIn("browser_auto_launch: false", text.stdout)
+        self.assertIn("external_action_started: false", text.stdout)
+        self.assertIn("raw_secret_values_included: false", text.stdout)
+        self.assertEqual(payload_result.returncode, 0, payload_result.stderr)
+        payload = json.loads(payload_result.stdout)
+        self.assertEqual(payload["title"], "AEGIS SETUP NEXT")
+        self.assertTrue(payload["metadata_only"])
+        self.assertTrue(payload["terminal_first"])
+        self.assertFalse(payload["browser_required"])
+        self.assertFalse(payload["browser_auto_launch"])
+        self.assertFalse(payload["gateway_started"])
+        self.assertFalse(payload["external_action_started"])
+        self.assertFalse(payload["model_invocation_performed"])
+        self.assertFalse(payload["send_probe_performed"])
+        self.assertFalse(payload["raw_secret_values_included"])
+        self.assertEqual(payload["priority_step"]["id"], "model")
+        self.assertEqual(payload["priority_step"]["command"], "/setup model")
+        self.assertEqual(payload["priority_step"]["cli_command"], "aegis-test setup model")
 
     def test_install_status_and_shim_are_terminal_only(self):
         with tempfile.TemporaryDirectory() as tmp:

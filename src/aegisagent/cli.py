@@ -21,7 +21,7 @@ from aegisagent.core.improvement import ImprovementStore, format_candidate, form
 from aegisagent.core.lifecycle import format_install_status, format_update_status, install_status_payload, install_terminal_shim, update_from_github
 from aegisagent.core.memory import MemoryStore, memory_files
 from aegisagent.core.provider_config import ProviderStore, ProviderUsageStore
-from aegisagent.core.setup_flow import SETUP_SECTIONS, SetupGuide, format_setup_quickstart, format_setup_section
+from aegisagent.core.setup_flow import SETUP_SECTIONS, SetupGuide, format_setup_next, format_setup_quickstart, format_setup_section
 from aegisagent.core.sessions import SessionStore
 from aegisagent.core.skills import SkillLoader
 from aegisagent.core.subagents import (
@@ -66,7 +66,7 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("activation", help="Print terminal activation and browser-off readiness details.")
 
     setup = sub.add_parser("setup", help="Create local runtime files and show secure setup flow.")
-    setup.add_argument("section", nargs="?", choices=SETUP_SECTIONS, help="Show one setup section.")
+    setup.add_argument("section", nargs="?", choices=(*SETUP_SECTIONS, "next"), help="Show one setup section or the next setup action.")
     setup.add_argument("--quick", action="store_true", help="Print the compact setup quickstart.")
     setup.add_argument("--full", action="store_true", help="Emit the full setup quickstart payload as JSON.")
     setup.add_argument("--run-checks", action="store_true")
@@ -269,7 +269,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "setup":
         setup_guide = SetupGuide(paths)
-        if args.run_checks or args.json:
+        if args.section == "next":
+            print(json.dumps(setup_guide.next_payload(), indent=2) if args.json else format_setup_next(setup_guide.priority()))
+        elif args.run_checks or args.json:
             print(json.dumps(setup_guide.run_checks(), indent=2))
         elif args.section:
             print(format_setup_section(setup_guide.section(args.section)))

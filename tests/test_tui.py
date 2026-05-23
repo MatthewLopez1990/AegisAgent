@@ -80,6 +80,7 @@ class TuiRendererTests(unittest.TestCase):
 
     def test_static_setup_and_tools_match_reference_affordances(self):
         setup = render(TuiState(view="setup"), width=100, height=32)
+        self.assertIn("/setup next", setup)
         self.assertIn("connect secrets vault", setup)
         self.assertIn("macOS Keychain", setup)
         self.assertIn("1Password CLI", setup)
@@ -153,6 +154,7 @@ class TuiRendererTests(unittest.TestCase):
         setup = next(panel for panel in panels if panel.panel_id == "focus")
         self.assertEqual(setup.title, "SETUP WIZARD")
         commands = {item.command for item in setup.items}
+        self.assertIn("/setup next", commands)
         self.assertIn("/setup model", commands)
         self.assertIn("/setup connectors", commands)
         self.assertIn("/setup first-task", commands)
@@ -279,6 +281,8 @@ class TuiRendererTests(unittest.TestCase):
         self.assertTrue(any(command == "/tasks recover" for command, _detail in recover_matches))
         setup_model_matches = slash_palette_candidates("/setup m")
         self.assertTrue(any(command == "/setup model" for command, _detail in setup_model_matches))
+        setup_next_matches = slash_palette_candidates("/setup n")
+        self.assertTrue(any(command == "/setup next" for command, _detail in setup_next_matches))
         setup_sandbox_matches = slash_palette_candidates("/setup sa")
         self.assertTrue(any(command == "/setup sandbox" for command, _detail in setup_sandbox_matches))
         setup_connectors_matches = slash_palette_candidates("/setup c")
@@ -352,6 +356,18 @@ class TuiRendererTests(unittest.TestCase):
             self.assertEqual(result, "setup")
             self.assertIn("AEGIS SETUP :: model", setup_model.getvalue())
             self.assertIn("aegis model configure", setup_model.getvalue())
+
+            setup_next = io.StringIO()
+            with contextlib.redirect_stdout(setup_next):
+                result = dispatch_interactive_command("/setup next", paths)
+
+            self.assertEqual(result, "setup")
+            self.assertIn("AEGIS SETUP :: next", setup_next.getvalue())
+            self.assertIn("command    aegis setup model", setup_next.getvalue())
+            self.assertIn("tui        /setup model", setup_next.getvalue())
+            self.assertIn("browser_auto_launch: false", setup_next.getvalue())
+            self.assertIn("external_action_started: false", setup_next.getvalue())
+            self.assertIn("raw_secret_values_included: false", setup_next.getvalue())
 
             setup_sandbox = io.StringIO()
             with contextlib.redirect_stdout(setup_sandbox):

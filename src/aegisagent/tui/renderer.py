@@ -298,6 +298,8 @@ def _setup_steps(width: int, height: int) -> list[str]:
         _panel_rule(width),
         _panel_line(_row("steps", "2/6", max(1, width - 4)), width),
         _panel_rule(width),
+        _panel_line("next /setup next", width),
+        _blank_panel(width),
         _panel_line("  1 choose model", width),
         _panel_line("    provider", width),
         _blank_panel(width),
@@ -322,6 +324,8 @@ def _setup_detail(width: int, height: int) -> list[str]:
         _panel_rule(width),
         _panel_line(_row("connect secrets vault", "required for providers", max(1, width - 4)), width),
         _panel_rule(width),
+        _panel_line("next command: aegis setup next or /setup next", width),
+        _blank_panel(width),
         _panel_line("aegis Store API keys outside the transcript; secret values never echo.", width),
         _blank_panel(width),
     ]
@@ -356,6 +360,8 @@ def _security_preview(width: int, height: int) -> list[str]:
 def _setup_narrow(width: int, height: int) -> list[str]:
     lines = [
         _row("steps 2/6", "connect secrets vault", width),
+        "",
+        "next command: aegis setup next or /setup next",
         "",
         "aegis Store API keys outside the transcript. I will never print secret values.",
         "",

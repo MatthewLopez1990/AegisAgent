@@ -26,7 +26,7 @@ from aegisagent.core.lifecycle import format_install_status, format_update_statu
 from aegisagent.core.memory import MemoryStore
 from aegisagent.core.provider_config import ProviderStore, ProviderUsageStore
 from aegisagent.core.sessions import SessionStore
-from aegisagent.core.setup_flow import SETUP_SECTIONS, SetupGuide, format_setup_quickstart, format_setup_section
+from aegisagent.core.setup_flow import SETUP_SECTIONS, SetupGuide, format_setup_next, format_setup_quickstart, format_setup_section, terminal_command_name
 from aegisagent.core.setup_state import setup_wizard_preferences, update_setup_wizard_preferences
 from aegisagent.core.skills import SkillLoader
 from aegisagent.core.subagents import (
@@ -92,6 +92,7 @@ SLASH_COMMANDS: tuple[tuple[str, str], ...] = (
     ("/capabilities", "show Hermes-class capability parity map"),
     ("/gaps", "show remaining partial, metadata-ready, and planned work"),
     ("/setup", "open secure first-run setup"),
+    ("/setup next", "show the next concrete setup action"),
     ("/setup model", "show model route setup steps"),
     ("/setup secrets", "show secret-handle setup steps"),
     ("/setup sandbox", "show sandbox readiness"),
@@ -267,6 +268,7 @@ COMMAND_MENU_GROUPS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
         "Setup",
         (
             ("/setup", "open secure first-run setup"),
+            ("/setup next", "show the next concrete setup action"),
             ("/setup model", "show provider configuration steps"),
             ("/setup secrets", "show safe secret-handle guidance"),
             ("/setup sandbox", "show sandbox and host-execution posture"),
@@ -407,6 +409,7 @@ def build_interactive_panels(paths: RuntimePaths, *, active_menu: str | None = N
     pending_label = "clear"
     if active_menu == "setup":
         focus = (
+            InteractiveItem("Next step", "Show the next concrete setup action.", "/setup next", "next"),
             InteractiveItem("Model provider", "Choose API key, subscription bridge, or local route.", "/setup model", "ready"),
             InteractiveItem("Secrets handles", "Store env names, never raw token values.", "/setup secrets", "safe"),
             InteractiveItem("Sandbox", "Prefer Docker; keep host execution gated.", "/setup sandbox", "review"),
@@ -1169,12 +1172,16 @@ def dispatch_interactive_command(command: str, paths: RuntimePaths) -> str:
                     "terminal_first": True,
                     "browser_auto_launch": False,
                     "external_action_started": False,
+                    "raw_secret_values_included": False,
                     "model_invocation_performed_until_submitted": False,
                 }
             )
             return "setup"
         if setup_args == "json":
             print_json(setup_guide.quickstart())
+            return "setup"
+        if setup_args in {"next", "continue"}:
+            print(format_setup_next(setup_guide.priority()))
             return "setup"
         if setup_args == "model":
             print(format_setup_section(setup_guide.section("model")))
@@ -1185,10 +1192,11 @@ def dispatch_interactive_command(command: str, paths: RuntimePaths) -> str:
         if setup_args in {"run-checks", "checks", "doctor"}:
             print_json(setup_guide.run_checks())
             return "setup"
+        command_name = terminal_command_name()
         print(format_setup_quickstart(setup_guide.quickstart()))
-        print("Terminal activation: aegisagent tui")
-        print("Installed alias: aegis tui")
-        print("Fallback static frame: aegisagent tui --print")
+        print(f"Terminal activation: {command_name} tui")
+        print(f"Next setup step: {command_name} setup next")
+        print(f"Fallback static frame: {command_name} tui --print")
         return "setup"
     if command.startswith("/tools"):
         print(render(TuiState(view="tools"), width=120, height=28))

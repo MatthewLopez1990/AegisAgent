@@ -17,6 +17,7 @@ from aegisagent.security.sandbox import detect_sandbox
 
 
 SETUP_SECTIONS = ("model", "secrets", "sandbox", "tools", "connectors", "memory")
+SETUP_NEXT_SECTION_COUNT = len(SETUP_SECTIONS)
 
 
 def terminal_command_name() -> str:
@@ -32,12 +33,57 @@ class SetupSection:
     checks: tuple[dict[str, Any], ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
+        command = self.commands[0] if self.commands else ""
+        ready = self.status in {"ready", "local"} or self.status.endswith("_enabled")
         return {
+            "id": self.name,
             "name": self.name,
+            "label": self.name.replace("_", " ").title(),
             "status": self.status,
+            "state": "ready" if ready else "action_required",
             "summary": self.summary,
+            "detail": self.summary,
+            "command": command,
             "commands": list(self.commands),
+            "next_commands": list(self.commands),
             "checks": list(self.checks),
+            "ready": ready,
+            "action_required": not ready,
+            "safe_to_run_now": True,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class SetupPriority:
+    section: str
+    status: str
+    label: str
+    reason: str
+    command: str
+    slash_command: str
+    index: int
+    total: int = SETUP_NEXT_SECTION_COUNT
+    terminal_first: bool = True
+    browser_required: bool = False
+    browser_auto_launch: bool = False
+    external_action_started: bool = False
+    done: bool = False
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "section": self.section,
+            "status": self.status,
+            "label": self.label,
+            "reason": self.reason,
+            "command": self.command,
+            "slash_command": self.slash_command,
+            "index": self.index,
+            "total": self.total,
+            "terminal_first": self.terminal_first,
+            "browser_required": self.browser_required,
+            "browser_auto_launch": self.browser_auto_launch,
+            "external_action_started": self.external_action_started,
+            "done": self.done,
         }
 
 
@@ -49,20 +95,114 @@ class SetupGuide:
     def quickstart(self) -> dict[str, Any]:
         sections = [self.section(name) for name in SETUP_SECTIONS]
         command = terminal_command_name()
+        priority = self.priority()
         return {
             "title": "AEGIS SETUP QUICKSTART",
             "version": __version__,
             "workspace": str(self.paths.workspace),
+            "status": "needs_operator_review" if not priority.done else "ready_for_checks",
             "metadata_only": True,
             "terminal_first": True,
             "browser_required": False,
+            "browser_auto_launch": False,
+            "gateway_started": False,
+            "external_action_started": False,
+            "model_invocation_performed": False,
+            "send_probe_performed": False,
+            "raw_secret_values_included": False,
+            "setup_progress": {
+                "current": priority.index,
+                "total": priority.total,
+                "complete": priority.done,
+                "priority_step": priority.section,
+            },
+            "priority_step": priority.to_dict(),
+            "priority": priority.to_dict(),
             "steps": [section.to_dict() for section in sections],
+            "verification_commands": [f"{command} setup --run-checks", "/setup run-checks", "/setup verify"],
             "next": [
-                f"1. Run `{command} setup model` or `/setup model`.",
+                f"1. Run `{command} setup next` or `/setup next`.",
                 f"2. Run `{command} setup --run-checks` or `/setup run-checks`.",
                 f"3. Launch `{command}` or `{command} tui` and keep working from the terminal composer.",
             ],
         }
+
+    def next_payload(self) -> dict[str, Any]:
+        priority = self.priority()
+        return {
+            "title": "AEGIS SETUP NEXT",
+            "workspace": str(self.paths.workspace),
+            "metadata_only": True,
+            "terminal_first": True,
+            "browser_required": False,
+            "browser_auto_launch": False,
+            "gateway_started": False,
+            "external_action_started": False,
+            "model_invocation_performed": False,
+            "send_probe_performed": False,
+            "raw_secret_values_included": False,
+            "priority_step": {
+                "id": priority.section,
+                "position": priority.index,
+                "total": priority.total,
+                "command": priority.slash_command,
+                "cli_command": priority.command,
+                "status": priority.status,
+                "summary": priority.reason,
+                "next_command": "/setup next",
+            },
+            "priority": priority.to_dict(),
+        }
+
+    def priority(self) -> SetupPriority:
+        command = terminal_command_name()
+        provider = ProviderStore(self.paths).summary()
+        provider_mode = str(provider.get("mode") or "unknown")
+        if provider_mode in {"unknown", "not_configured", "local"}:
+            return SetupPriority(
+                section="model",
+                status=provider_mode,
+                label="Choose model route",
+                reason="Pick the local terminal route or save an external provider handle before running real agent turns.",
+                command=f"{command} setup model",
+                slash_command="/setup model",
+                index=1,
+            )
+
+        sandbox = detect_sandbox()
+        if sandbox.backend != "docker":
+            return SetupPriority(
+                section="sandbox",
+                status=sandbox.backend,
+                label="Review execution sandbox",
+                reason="Host execution is allowed only through policy gates; review this before enabling broader tools.",
+                command=f"{command} setup sandbox",
+                slash_command="/setup sandbox",
+                index=3,
+            )
+
+        connector_summary = ConnectorStore(self.paths).summary()
+        if connector_summary["enabled_count"] == 0:
+            return SetupPriority(
+                section="connectors",
+                status="0_enabled",
+                label="Review connector metadata",
+                reason="External delivery stays disabled until a connector is explicitly configured and approved.",
+                command=f"{command} setup connectors",
+                slash_command="/setup connectors",
+                index=5,
+            )
+
+        return SetupPriority(
+            section="checks",
+            status="ready",
+            label="Run setup checks",
+            reason="Core setup metadata is present; run the local readiness receipt before normal use.",
+            command=f"{command} setup --run-checks",
+            slash_command="/setup run-checks",
+            index=SETUP_NEXT_SECTION_COUNT,
+            done=True,
+        )
 
     def section(self, name: str) -> SetupSection:
         if name == "model":
@@ -143,6 +283,8 @@ class SetupGuide:
             "setup.check",
             {
                 "external_action_started": False,
+                "browser_auto_launch": False,
+                "gateway_started": False,
                 "model_invocation_performed": False,
                 "send_probe_performed": False,
                 "raw_secret_values_included": False,
@@ -160,6 +302,8 @@ class SetupGuide:
             "metadata_only": True,
             "terminal_first": True,
             "browser_required": False,
+            "browser_auto_launch": False,
+            "gateway_started": False,
             "external_action_started": False,
             "model_invocation_performed": False,
             "send_probe_performed": False,
@@ -175,6 +319,12 @@ class SetupGuide:
 def format_setup_quickstart(payload: dict[str, Any]) -> str:
     command = terminal_command_name()
     lines = [str(payload["title"]), f"workspace  {payload['workspace']}", f"terminal   {command} tui", ""]
+    priority = payload.get("priority") or {}
+    if priority:
+        lines.append(f"start here {command} setup next  (/setup next)")
+        lines.append(f"opens      {priority['command']}  ({priority['slash_command']})")
+        lines.append(f"why        {priority['reason']}")
+        lines.append("")
     for index, section in enumerate(payload["steps"], start=1):
         lines.append(f"{index}. {section['name']:<10} {section['status']:<18} {section['summary']}")
         if section["commands"]:
@@ -190,4 +340,31 @@ def format_setup_section(section: SetupSection) -> str:
         lines.extend(["", "checks"])
         for check in section.checks:
             lines.append("- " + json.dumps(check, sort_keys=True))
+    return "\n".join(lines)
+
+
+def format_setup_next(priority: SetupPriority | dict[str, Any]) -> str:
+    data = priority.to_dict() if isinstance(priority, SetupPriority) else priority
+    lines = [
+        "AEGIS SETUP :: next",
+        "Start here: /setup next",
+        f"step       {data['index']}/{data['total']} {data['section']}",
+        f"status     {data['status']}",
+        f"guided    {data['label']}",
+        f"command    {data['command']}",
+        f"tui        {data['slash_command']}",
+        f"reason     {data['reason']}",
+        "",
+        "safety",
+        f"- terminal_first: {str(data['terminal_first']).lower()}",
+        f"- browser_required: {str(data['browser_required']).lower()}",
+        f"- browser_auto_launch: {str(data['browser_auto_launch']).lower()}",
+        f"- external_action_started: {str(data['external_action_started']).lower()}",
+        "- model_invocation_performed: false",
+        "- raw_secret_values_included: false",
+        "",
+        "then",
+        f"- Run `{terminal_command_name()} setup --run-checks` after completing this step.",
+        "- Use `/setup hide` when you want the setup wizard out of the default TUI.",
+    ]
     return "\n".join(lines)
