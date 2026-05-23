@@ -37,6 +37,26 @@ class CliTests(unittest.TestCase):
         self.assertEqual(scripts["aegisagent"], "aegisagent.cli:main")
         self.assertEqual(scripts["aegis"], "aegisagent.cli:main")
 
+    def test_mac_linux_installer_scripts_are_terminal_first(self):
+        install = Path("scripts/install.sh")
+        update = Path("scripts/update.sh")
+
+        self.assertTrue(install.exists())
+        self.assertTrue(update.exists())
+        self.assertTrue(install.stat().st_mode & 0o111)
+        self.assertTrue(update.stat().st_mode & 0o111)
+        install_text = install.read_text(encoding="utf-8")
+        update_text = update.read_text(encoding="utf-8")
+        self.assertIn("git clone --branch", install_text)
+        self.assertIn("git -C \"$INSTALL_DIR\" pull --ff-only origin \"$BRANCH\"", install_text)
+        self.assertIn("python3 -m aegisagent install shim --approved", install_text)
+        self.assertIn("git -C \"$INSTALL_DIR\" pull --ff-only origin \"$BRANCH\"", update_text)
+        self.assertIn("python3 -m aegisagent install shim --approved", update_text)
+        self.assertNotIn("open ", install_text)
+        self.assertNotIn("xdg-open", install_text)
+        self.assertNotIn("open ", update_text)
+        self.assertNotIn("xdg-open", update_text)
+
     def test_no_args_explains_terminal_activation_without_web(self):
         with tempfile.TemporaryDirectory() as tmp:
             result = run_cli(cwd=tmp)
