@@ -179,6 +179,110 @@ class MemorySkillsSubagentTests(unittest.TestCase):
             self.assertEqual(by_name["linked"]["trust_level"], "quarantined")
             self.assertTrue(by_name["linked"]["trust"]["symlink_detected"])
 
+    def test_skill_loader_verifies_optional_checksum_manifest(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "skills"
+            skill_root = root / "safe"
+            skill_root.mkdir(parents=True)
+            (skill_root / "SKILL.md").write_text("---\nname: safe\ndescription: clean\n---\nUse local notes only.\n", encoding="utf-8")
+
+            first = SkillLoader([root]).trust_summary()
+            bundle_hash = first["skills"][0]["trust"]["bundle_sha256"]
+            (skill_root / "aegis-skill-trust.json").write_text(
+                json.dumps({"schema_version": 1, "algorithm": "sha256-bundle-v1", "bundle_sha256": bundle_hash}, sort_keys=True),
+                encoding="utf-8",
+            )
+
+            summary = SkillLoader([root]).trust_summary()
+            skill = summary["skills"][0]
+
+            self.assertEqual(skill["manifest_status"], "checksum_valid")
+            self.assertEqual(skill["signature_status"], "missing")
+            self.assertEqual(skill["trust"]["manifest"]["status"], "checksum_valid")
+            self.assertEqual(skill["trust_level"], "trusted")
+
+    def test_skill_loader_quarantines_checksum_manifest_mismatch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "skills"
+            skill_root = root / "unsafe"
+            skill_root.mkdir(parents=True)
+            (skill_root / "SKILL.md").write_text("---\nname: unsafe\ndescription: clean\n---\nUse local notes only.\n", encoding="utf-8")
+            (skill_root / "aegis-skill-trust.json").write_text(
+                json.dumps({"schema_version": 1, "algorithm": "sha256-bundle-v1", "bundle_sha256": "0" * 64}, sort_keys=True),
+                encoding="utf-8",
+            )
+
+            summary = SkillLoader([root]).trust_summary()
+            skill = summary["skills"][0]
+
+            self.assertEqual(skill["manifest_status"], "mismatch")
+            self.assertEqual(skill["trust_level"], "quarantined")
+            self.assertIn("manifest.bundle_mismatch", {finding["rule_id"] for finding in skill["findings"]})
+
+    def test_skill_loader_declared_signature_is_unverified_review_metadata(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "skills"
+            skill_root = root / "signed"
+            skill_root.mkdir(parents=True)
+            (skill_root / "SKILL.md").write_text("---\nname: signed\ndescription: clean\n---\nUse local notes only.\n", encoding="utf-8")
+            bundle_hash = SkillLoader([root]).trust_summary()["skills"][0]["trust"]["bundle_sha256"]
+            raw_signature = "very-secret-signature-material"
+            (skill_root / "aegis-skill-trust.json").write_text(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "kind": "aegis.skill.trust",
+                        "algorithm": "sha256-bundle-v1",
+                        "bundle_sha256": bundle_hash,
+                        "issuer": {"key_id": "team-key", "public_key_sha256": "1" * 64},
+                        "signature": {"algorithm": "ed25519", "encoding": "base64", "value": raw_signature},
+                    },
+                    sort_keys=True,
+                ),
+                encoding="utf-8",
+            )
+
+            summary = SkillLoader([root]).trust_summary()
+            skill = summary["skills"][0]
+
+            self.assertNotIn(raw_signature, json.dumps(summary))
+            self.assertEqual(skill["manifest_status"], "checksum_valid_signature_unverified")
+            self.assertEqual(skill["signature_status"], "declared_unverified")
+            self.assertEqual(skill["trust_level"], "review")
+            self.assertIn("manifest.signature_unverified", {finding["rule_id"] for finding in skill["findings"]})
+
+    def test_skill_loader_bundle_hash_fails_closed_on_symlink_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "skills"
+            skill_root = root / "linked-bundle"
+            skill_root.mkdir(parents=True)
+            (skill_root / "SKILL.md").write_text("---\nname: linked\ndescription: clean\n---\nUse local notes only.\n", encoding="utf-8")
+            outside = Path(tmp) / "outside.txt"
+            outside.write_text("outside\n", encoding="utf-8")
+            (skill_root / "outside.txt").symlink_to(outside)
+
+            summary = SkillLoader([root]).trust_summary()
+            skill = summary["skills"][0]
+
+            self.assertEqual(skill["trust_level"], "quarantined")
+            self.assertIn("bundle.symlink_file", {finding["rule_id"] for finding in skill["findings"]})
+
+    def test_skill_loader_hashes_full_oversized_skill_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "skills"
+            skill_root = root / "large"
+            skill_root.mkdir(parents=True)
+            body = "---\nname: large\ndescription: clean\n---\n" + ("a" * 512_500) + "tail-one"
+            skill_file = skill_root / "SKILL.md"
+            skill_file.write_text(body, encoding="utf-8")
+
+            first = SkillLoader([root]).trust_summary()["skills"][0]
+            skill_file.write_text(body + "tail-two", encoding="utf-8")
+            second = SkillLoader([root]).trust_summary()["skills"][0]
+
+            self.assertTrue(first["trust"]["truncated"])
+            self.assertNotEqual(first["trust"]["skill_file_sha256"], second["trust"]["skill_file_sha256"])
+
     def test_subagent_limits_depth_and_children(self):
         queue = SubagentQueue(SubagentLimits(max_concurrency=8, max_depth=1, max_children=1))
         parent = queue.spawn("root")

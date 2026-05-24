@@ -101,7 +101,7 @@ aegis memory delete <entry-id> --approved
 
 ## Skills And Trust Metadata
 
-Skill handling is passive discovery only. Aegis reads `SKILL.md` files under the workspace `skills/` directory and `~/.aegisagent/skills` as text, redacts body-derived metadata, computes stable hashes, and reports trust posture without executing skills.
+Skill handling is passive discovery only. Aegis reads `SKILL.md` files under the workspace `skills/` directory and `~/.aegisagent/skills` as text, redacts body-derived metadata, computes stable hashes, optionally checks `aegis-skill-trust.json` manifests with `algorithm: sha256-bundle-v1`, `bundle_sha256`, and optional `signature`, and reports trust/provenance posture without executing skills.
 
 ```bash
 aegis skills
@@ -112,7 +112,7 @@ aegis skills --limit 10
 /skills
 ```
 
-The output includes `trusted`, `review`, and `quarantined` counts plus each visible skill's redacted `name`, `description`, `findings`, `skill_id`, content hashes, and passive safety flags. Quarantine is marker- and path-safety based. Signed bundle verification and policy-integrated skill execution approvals are still future work.
+The output includes `trusted`, `review`, and `quarantined` counts plus each visible skill's redacted `name`, `description`, `findings`, `skill_id`, content hashes, manifest status, signature status, and passive safety flags. Quarantine is marker-, path-safety-, and manifest-integrity-based. Missing manifests are acceptable; invalid or mismatched manifests quarantine the skill. Signatures are surfaced as declared/unverified until trusted-key signature verification lands. Policy-integrated skill execution approvals remain future work.
 
 ## Governed Workspace Tools
 

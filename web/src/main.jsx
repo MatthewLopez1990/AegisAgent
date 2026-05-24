@@ -32,7 +32,7 @@ const fallbackTools = [
   { name: "network", status: "gated", scope: "allowlist", approval: "ask", risk: "high", description: "Fetch remote data only after approval." },
   { name: "secrets", status: "locked", scope: "read handle", approval: "never echo", risk: "high", description: "Store secret handles without transcript echo." },
   { name: "memory", status: "on", scope: "user files", approval: "ask write", risk: "medium", description: "Search curated memory and sessions." },
-  { name: "skills", status: "on", scope: "signed set", approval: "auto", risk: "low", description: "Load SKILL.md folders." },
+  { name: "skills", status: "on", scope: "passive manifest", approval: "auto", risk: "low", description: "Discover SKILL.md folders and verify optional checksum manifests without execution." },
   { name: "subagents", status: "on", scope: "isolated sessions", approval: "ask spawn", risk: "medium", description: "Spawn bounded helper sessions." },
   { name: "mcp", status: "gated", scope: "registered servers", approval: "ask connect", risk: "high", description: "Register MCP-compatible external tools." }
 ];

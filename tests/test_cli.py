@@ -96,6 +96,69 @@ class CliTests(unittest.TestCase):
         self.assertEqual(by_name["fetch"]["trust_level"], "review")
         self.assertEqual(by_name["danger"]["trust_level"], "quarantined")
 
+    def test_skills_cli_surfaces_checksum_manifest_status(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp) / "home"
+            home.mkdir()
+            skill_root = Path(tmp) / "skills" / "safe"
+            skill_root.mkdir(parents=True)
+            (skill_root / "SKILL.md").write_text("---\nname: safe\ndescription: clean\n---\nUse local notes only.\n", encoding="utf-8")
+            initial = run_cli("skills", cwd=tmp, extra_env={"HOME": str(home)})
+            bundle_hash = json.loads(initial.stdout)["skills"][0]["trust"]["bundle_sha256"]
+            (skill_root / "aegis-skill-trust.json").write_text(
+                json.dumps({"schema_version": 1, "kind": "aegis.skill.trust", "algorithm": "sha256-bundle-v1", "bundle_sha256": bundle_hash}, sort_keys=True),
+                encoding="utf-8",
+            )
+
+            result = run_cli("skills", cwd=tmp, extra_env={"HOME": str(home)})
+            audit = [json.loads(line) for line in (Path(tmp) / ".aegisagent" / "audit.jsonl").read_text(encoding="utf-8").splitlines()]
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["skills"][0]["manifest_status"], "checksum_valid")
+        self.assertEqual(payload["skills"][0]["trust"]["manifest"]["checksum_algorithm"], "sha256-bundle-v1")
+        receipt = audit[-1]["payload"]
+        self.assertEqual(receipt["skill_verifications"][0]["manifest"]["status"], "checksum_valid")
+        self.assertNotIn("description", json.dumps(receipt))
+        self.assertNotIn("allowed_root", json.dumps(receipt))
+
+    def test_skills_cli_signature_metadata_is_unverified_and_redacted(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp) / "home"
+            home.mkdir()
+            skill_root = Path(tmp) / "skills" / "signed"
+            skill_root.mkdir(parents=True)
+            (skill_root / "SKILL.md").write_text("---\nname: signed\ndescription: clean\n---\nUse local notes only.\n", encoding="utf-8")
+            initial = run_cli("skills", cwd=tmp, extra_env={"HOME": str(home)})
+            bundle_hash = json.loads(initial.stdout)["skills"][0]["trust"]["bundle_sha256"]
+            raw_signature = "very-secret-signature-material"
+            (skill_root / "aegis-skill-trust.json").write_text(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "kind": "aegis.skill.trust",
+                        "algorithm": "sha256-bundle-v1",
+                        "bundle_sha256": bundle_hash,
+                        "issuer": {"key_id": "team-key", "public_key_sha256": "1" * 64},
+                        "signature": {"algorithm": "ed25519", "encoding": "base64", "value": raw_signature},
+                    },
+                    sort_keys=True,
+                ),
+                encoding="utf-8",
+            )
+
+            result = run_cli("skills", cwd=tmp, extra_env={"HOME": str(home)})
+            audit_text = (Path(tmp) / ".aegisagent" / "audit.jsonl").read_text(encoding="utf-8")
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn(raw_signature, result.stdout)
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["skills"][0]["manifest_status"], "checksum_valid_signature_unverified")
+        self.assertEqual(payload["skills"][0]["signature_status"], "declared_unverified")
+        self.assertEqual(payload["skills"][0]["trust_level"], "review")
+        self.assertNotIn(raw_signature, audit_text)
+        self.assertIn('"status": "declared_unverified"', audit_text)
+
     def test_no_args_explains_terminal_activation_without_web(self):
         with tempfile.TemporaryDirectory() as tmp:
             result = run_cli(cwd=tmp)

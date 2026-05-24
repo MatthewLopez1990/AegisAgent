@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -12,6 +13,7 @@ SKILL_TRUST_SCHEMA_VERSION = 1
 SKILL_TRUST_SCANNER_VERSION = "2026-05-24"
 SKILL_TRUST_RULE_SET_VERSION = "aegis-skill-rules-v1"
 MAX_SKILL_FILE_BYTES = 512_000
+SKILL_TRUST_MANIFEST = "aegis-skill-trust.json"
 
 RISKY_SKILL_MARKERS: dict[str, tuple[str, int, str]] = {
     "../": ("path_escape_hint", 25, "relative parent path reference"),
@@ -52,22 +54,46 @@ class Skill:
     skill_file_sha256: str
     bundle_sha256: str
     file_size_bytes: int
+    manifest_status: str = "missing"
+    signature_status: str = "missing"
+    manifest_path: str = ""
+    manifest_sha256: str = ""
+    declared_bundle_sha256: str = ""
+    signature_algorithm: str = ""
+    issuer_key_id: str = ""
+    issuer_public_key_sha256: str = ""
     truncated: bool = False
     symlink_detected: bool = False
     inside_allowed_root: bool = True
     readable: bool = True
 
     def to_dict(self) -> dict:
+        display_path = redact_text(str(self.path)).text
+        display_relative_path = redact_text(self.relative_path).text
+        display_allowed_root = redact_text(str(self.allowed_root)).text
+        display_manifest_path = redact_text(self.manifest_path).text
         trust = {
             "schema_version": SKILL_TRUST_SCHEMA_VERSION,
             "scanner_version": SKILL_TRUST_SCANNER_VERSION,
             "rule_set_version": SKILL_TRUST_RULE_SET_VERSION,
             "skill_id": self.skill_id,
             "source_scope": self.source_scope,
-            "relative_path": self.relative_path,
-            "allowed_root": str(self.allowed_root),
+            "relative_path": display_relative_path,
+            "allowed_root": display_allowed_root,
             "skill_file_sha256": self.skill_file_sha256,
             "bundle_sha256": self.bundle_sha256,
+            "manifest": {
+                "status": self.manifest_status,
+                "path": display_manifest_path,
+                "sha256": self.manifest_sha256,
+                "signature_status": self.signature_status,
+                "checksum_algorithm": "sha256-bundle-v1",
+                "declared_bundle_sha256": self.declared_bundle_sha256,
+                "signature_algorithm": self.signature_algorithm,
+                "issuer_key_id": self.issuer_key_id,
+                "issuer_public_key_sha256": self.issuer_public_key_sha256,
+                "verification_performed": False,
+            },
             "readable": self.readable,
             "truncated": self.truncated,
             "file_size_bytes": self.file_size_bytes,
@@ -89,7 +115,7 @@ class Skill:
         }
         return {
             "name": self.name,
-            "path": str(self.path),
+            "path": display_path,
             "description": self.description,
             "quarantined": self.quarantined,
             "findings": list(self.findings),
@@ -97,13 +123,63 @@ class Skill:
             "trust_score": self.trust_score,
             "source_scope": self.source_scope,
             "skill_id": self.skill_id,
-            "relative_path": self.relative_path,
+            "relative_path": display_relative_path,
+            "manifest_status": self.manifest_status,
+            "signature_status": self.signature_status,
+            "manifest_sha256": self.manifest_sha256,
             "readable": self.readable,
             "execution_performed": False,
             "external_action_started": False,
             "browser_auto_launch": False,
             "trust": trust,
         }
+
+
+def skill_audit_payload(summary: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "counts": summary["counts"],
+        "trust_schema_version": SKILL_TRUST_SCHEMA_VERSION,
+        "scanner_version": SKILL_TRUST_SCANNER_VERSION,
+        "rule_set_version": SKILL_TRUST_RULE_SET_VERSION,
+        "audited_skill_count": len(summary.get("skills", [])),
+        "skill_verifications": [_skill_verification_record(skill) for skill in summary.get("skills", [])],
+        "execution_performed": summary["execution_performed"],
+        "external_action_started": summary["external_action_started"],
+        "browser_auto_launch": summary["browser_auto_launch"],
+        "model_invocation_performed": summary["model_invocation_performed"],
+        "network_request_performed": summary["network_request_performed"],
+        "send_probe_performed": summary["send_probe_performed"],
+        "raw_secret_values_included": summary["raw_secret_values_included"],
+    }
+
+
+def _skill_verification_record(skill: dict[str, Any]) -> dict[str, Any]:
+    trust = skill.get("trust", {})
+    manifest = trust.get("manifest", {})
+    return {
+        "skill_id": skill.get("skill_id", ""),
+        "source_scope": skill.get("source_scope", ""),
+        "relative_path": skill.get("relative_path", ""),
+        "trust_level": skill.get("trust_level", ""),
+        "trust_score": skill.get("trust_score", 0),
+        "quarantined": skill.get("quarantined", False),
+        "skill_file_sha256": trust.get("skill_file_sha256", ""),
+        "bundle_sha256": trust.get("bundle_sha256", ""),
+        "manifest": {
+            "status": manifest.get("status", "missing"),
+            "path": manifest.get("path", ""),
+            "sha256": manifest.get("sha256", ""),
+            "checksum_algorithm": manifest.get("checksum_algorithm", ""),
+        },
+        "signature": {
+            "status": manifest.get("signature_status", "missing"),
+            "algorithm": manifest.get("signature_algorithm", ""),
+            "issuer_key_id": manifest.get("issuer_key_id", ""),
+            "issuer_public_key_sha256": manifest.get("issuer_public_key_sha256", ""),
+            "verification_performed": manifest.get("verification_performed", False),
+        },
+        "finding_rule_ids": [finding.get("rule_id", "") for finding in skill.get("findings", [])],
+    }
 
 
 class SkillLoader:
@@ -221,6 +297,11 @@ def _load_skill(skill_file: Path, root: Path, source_scope: str) -> Skill:
     truncated = False
     skill_hash = ""
     bundle_hash = ""
+    manifest_status = "missing"
+    signature_status = "missing"
+    manifest_path = ""
+    manifest_hash = ""
+    manifest_details: dict[str, str] = {}
     try:
         skill_file.resolve(strict=False).relative_to(root)
     except ValueError:
@@ -233,15 +314,19 @@ def _load_skill(skill_file: Path, root: Path, source_scope: str) -> Skill:
         extra_findings.append(_path_finding("path.outside_root", "path_escape", 50, "skill file resolves outside the allowed root", 0))
     if readable:
         try:
-            file_size_bytes = skill_file.stat().st_size
-            raw = skill_file.read_bytes()
-            if len(raw) > MAX_SKILL_FILE_BYTES:
-                raw = raw[:MAX_SKILL_FILE_BYTES]
+            raw_full = skill_file.read_bytes()
+            file_size_bytes = len(raw_full)
+            skill_hash = hashlib.sha256(raw_full).hexdigest()
+            raw = raw_full
+            if len(raw_full) > MAX_SKILL_FILE_BYTES:
+                raw = raw_full[:MAX_SKILL_FILE_BYTES]
                 truncated = True
                 extra_findings.append(_path_finding("file.truncated", "oversized_skill", 25, "skill file exceeded scanner byte limit", 0))
             body = raw.decode("utf-8", errors="replace")
-            skill_hash = hashlib.sha256(raw).hexdigest()
-            bundle_hash = _bundle_sha256(path, root)
+            bundle_hash, bundle_findings = _bundle_sha256(path, root)
+            extra_findings.extend(bundle_findings)
+            manifest_status, signature_status, manifest_path, manifest_hash, manifest_details, manifest_findings = _verify_trust_manifest(path, root, bundle_hash)
+            extra_findings.extend(manifest_findings)
         except OSError:
             readable = False
             extra_findings.append(_path_finding("file.unreadable", "unreadable_skill", 50, "skill file could not be read", 0))
@@ -265,6 +350,14 @@ def _load_skill(skill_file: Path, root: Path, source_scope: str) -> Skill:
         skill_file_sha256=skill_hash,
         bundle_sha256=bundle_hash,
         file_size_bytes=file_size_bytes,
+        manifest_status=manifest_status,
+        signature_status=signature_status,
+        manifest_path=manifest_path,
+        manifest_sha256=manifest_hash,
+        declared_bundle_sha256=manifest_details.get("declared_bundle_sha256", ""),
+        signature_algorithm=manifest_details.get("signature_algorithm", ""),
+        issuer_key_id=manifest_details.get("issuer_key_id", ""),
+        issuer_public_key_sha256=manifest_details.get("issuer_public_key_sha256", ""),
         truncated=truncated,
         symlink_detected=symlink_detected,
         inside_allowed_root=inside_allowed_root,
@@ -272,25 +365,100 @@ def _load_skill(skill_file: Path, root: Path, source_scope: str) -> Skill:
     )
 
 
-def _bundle_sha256(path: Path, root: Path) -> str:
+def _bundle_sha256(path: Path, root: Path) -> tuple[str, list[dict[str, Any]]]:
     digest = hashlib.sha256()
+    findings: list[dict[str, Any]] = []
+    ignored_dirs = {".git", "__pycache__", ".venv", "node_modules"}
     for current, dirnames, filenames in os.walk(path, followlinks=False):
         current_path = Path(current)
-        dirnames[:] = sorted(dirname for dirname in dirnames if not (current_path / dirname).is_symlink() and dirname not in {".git", "__pycache__", ".venv", "node_modules"})
+        next_dirnames: list[str] = []
+        for dirname in sorted(dirnames):
+            dir_path = current_path / dirname
+            if dir_path.is_symlink():
+                findings.append(_path_finding("bundle.symlink_dir", "bundle_integrity", 50, "skill bundle contains a symlinked directory that was not hashed", 0))
+                continue
+            if dirname in ignored_dirs:
+                findings.append(_path_finding("bundle.ignored_dir", "bundle_integrity", 25, "skill bundle contains an ignored generated directory that was not hashed", 0))
+                continue
+            next_dirnames.append(dirname)
+        dirnames[:] = next_dirnames
         for filename in sorted(filenames):
             file_path = current_path / filename
+            if file_path.name == SKILL_TRUST_MANIFEST or file_path.name.endswith(".sig"):
+                continue
             if file_path.is_symlink():
+                findings.append(_path_finding("bundle.symlink_file", "bundle_integrity", 50, "skill bundle contains a symlinked file that was not hashed", 0))
                 continue
             try:
                 relative = file_path.relative_to(root).as_posix()
                 data = file_path.read_bytes()
             except (OSError, ValueError):
+                findings.append(_path_finding("bundle.unreadable_file", "bundle_integrity", 50, "skill bundle contains an unreadable file that was not hashed", 0))
                 continue
             digest.update(relative.encode("utf-8"))
             digest.update(b"\0")
             digest.update(hashlib.sha256(data).hexdigest().encode("ascii"))
             digest.update(b"\n")
-    return digest.hexdigest()
+    return digest.hexdigest(), findings
+
+
+def _verify_trust_manifest(path: Path, root: Path, bundle_hash: str) -> tuple[str, str, str, str, dict[str, str], list[dict[str, Any]]]:
+    manifest_path = path / SKILL_TRUST_MANIFEST
+    relative = _relative_path(manifest_path, root)
+    if manifest_path.is_symlink():
+        return "invalid", "missing", relative, "", {}, [_path_finding("manifest.symlink", "path_escape", 50, "skill trust manifest is symlinked", 0)]
+    if not manifest_path.exists():
+        return "missing", "missing", "", "", {}, []
+    try:
+        manifest_path.resolve(strict=False).relative_to(root)
+    except ValueError:
+        return "invalid", "missing", relative, "", {}, [_path_finding("manifest.outside_root", "path_escape", 50, "skill trust manifest resolves outside the allowed root", 0)]
+    try:
+        raw_bytes = manifest_path.read_bytes()
+        manifest_hash = hashlib.sha256(raw_bytes).hexdigest()
+        raw = raw_bytes.decode("utf-8")
+        manifest = json.loads(raw)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return "invalid", "missing", relative, "", {}, [_path_finding("manifest.invalid_json", "manifest_integrity", 35, "skill trust manifest is not valid JSON", 0)]
+    if not isinstance(manifest, dict):
+        return "invalid", "missing", relative, manifest_hash, {}, [_path_finding("manifest.invalid_shape", "manifest_integrity", 35, "skill trust manifest must be a JSON object", 0)]
+    algorithm = str(manifest.get("algorithm") or "")
+    declared = str(manifest.get("bundle_sha256") or "")
+    signature = manifest.get("signature")
+    issuer = manifest.get("issuer")
+    signature_algorithm = _signature_algorithm(signature)
+    issuer_key_id = _issuer_key_id(issuer)
+    issuer_public_key_sha256 = _issuer_public_key_sha256(issuer)
+    details = {
+        "declared_bundle_sha256": declared if _is_sha256(declared) else "",
+        "signature_algorithm": signature_algorithm,
+        "issuer_key_id": issuer_key_id,
+        "issuer_public_key_sha256": issuer_public_key_sha256,
+    }
+    findings: list[dict[str, Any]] = []
+    signature_status = "declared_unverified" if signature_algorithm else "missing"
+    if manifest.get("schema_version") not in {None, 1}:
+        findings.append(_path_finding("manifest.unsupported_schema", "manifest_integrity", 35, "skill trust manifest schema version is unsupported", 0))
+    if manifest.get("kind") not in {None, "aegis.skill.trust"}:
+        findings.append(_path_finding("manifest.unsupported_kind", "manifest_integrity", 35, "skill trust manifest kind is unsupported", 0))
+    if algorithm != "sha256-bundle-v1":
+        findings.append(_path_finding("manifest.unsupported_algorithm", "manifest_integrity", 35, "skill trust manifest algorithm is unsupported", 0))
+    if not _is_sha256(declared):
+        findings.append(_path_finding("manifest.invalid_bundle_sha256", "manifest_integrity", 35, "skill trust manifest bundle_sha256 must be a SHA-256 hex digest", 0))
+    elif declared != bundle_hash:
+        findings.append(_path_finding("manifest.bundle_mismatch", "manifest_integrity", 45, "skill trust manifest bundle hash does not match scanned files", 0))
+    signature_present = signature is not None and signature != ""
+    if signature_present and signature_algorithm != "ed25519":
+        signature_status = "invalid"
+        findings.append(_path_finding("manifest.unsupported_signature", "manifest_integrity", 25, "skill trust manifest signature algorithm is unsupported", 0))
+    elif signature_algorithm == "ed25519":
+        findings.append(_path_finding("manifest.signature_unverified", "manifest_integrity", 25, "skill trust manifest signature is declared but not cryptographically verified", 0))
+    blocking_findings = [finding for finding in findings if finding["rule_id"] != "manifest.signature_unverified"]
+    if blocking_findings:
+        return "mismatch" if any(finding["rule_id"] == "manifest.bundle_mismatch" for finding in blocking_findings) else "invalid", signature_status, relative, manifest_hash, details, findings
+    if signature_algorithm:
+        return "checksum_valid_signature_unverified", signature_status, relative, manifest_hash, details, findings
+    return "checksum_valid", "missing", relative, manifest_hash, details, []
 
 
 def _path_finding(rule_id: str, finding_type: str, severity: int, rationale: str, line: int) -> dict[str, Any]:
@@ -327,6 +495,31 @@ def _skill_id(source_scope: str, relative_path: str, content_hash: str) -> str:
 
 def _stable_fragment(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()[:8]
+
+
+def _is_sha256(value: str) -> bool:
+    return len(value) == 64 and all(char in "0123456789abcdef" for char in value.lower())
+
+
+def _signature_algorithm(signature: Any) -> str:
+    if isinstance(signature, dict):
+        return redact_text(str(signature.get("algorithm") or "")).text.lower()
+    if isinstance(signature, str) and signature.strip():
+        return "unknown"
+    return ""
+
+
+def _issuer_key_id(issuer: Any) -> str:
+    if not isinstance(issuer, dict):
+        return ""
+    return redact_text(str(issuer.get("key_id") or "")).text
+
+
+def _issuer_public_key_sha256(issuer: Any) -> str:
+    if not isinstance(issuer, dict):
+        return ""
+    value = str(issuer.get("public_key_sha256") or "")
+    return value.lower() if _is_sha256(value) else ""
 
 
 def _source_scope(root: Path) -> str:

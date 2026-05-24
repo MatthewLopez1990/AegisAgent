@@ -107,9 +107,9 @@ CAPABILITIES: tuple[Capability, ...] = (
         "memory_sessions_skills",
         "Memory, sessions, and skills",
         "partial",
-        "Local memory files, redacted memory list/show/search, approval-gated curated memory writes/deletes, redacted session search, and passive SKILL.md trust metadata are available.",
+        "Local memory files, redacted memory list/show/search, approval-gated curated memory writes/deletes, redacted session search, passive SKILL.md trust metadata, and optional checksum-manifest verification are available.",
         "primary",
-        "Add signed skill bundle verification and policy-integrated skill execution approvals.",
+        "Add trusted-key signature verification and policy-integrated skill execution approvals.",
         ("aegis memory list", "aegis skills", "/skills", "aegis memory delete <entry-id> --approved"),
     ),
     Capability(

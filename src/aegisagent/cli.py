@@ -24,7 +24,7 @@ from aegisagent.core.memory import MemoryStore, memory_files
 from aegisagent.core.provider_config import ProviderStore, ProviderUsageStore
 from aegisagent.core.setup_flow import SETUP_SECTIONS, SetupGuide, format_setup_next, format_setup_quickstart, format_setup_section
 from aegisagent.core.sessions import SessionStore
-from aegisagent.core.skills import SkillLoader
+from aegisagent.core.skills import SkillLoader, skill_audit_payload
 from aegisagent.core.subagents import (
     LocalSubagentOrchestrator,
     SubagentQueue,
@@ -388,16 +388,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "skills":
         loader = SkillLoader([paths.skills_dir, Path.home() / ".aegisagent" / "skills"])
         summary = loader.trust_summary(limit=args.limit or None)
-        audit.append(
-            "skills.discover",
-            {
-                "counts": summary["counts"],
-                "execution_performed": summary["execution_performed"],
-                "external_action_started": summary["external_action_started"],
-                "browser_auto_launch": summary["browser_auto_launch"],
-                "raw_secret_values_included": summary["raw_secret_values_included"],
-            },
-        )
+        audit_summary = summary if not args.limit else loader.trust_summary()
+        audit.append("skills.discover", skill_audit_payload(audit_summary))
         print(json.dumps(summary, indent=2))
         return 0
 

@@ -13,6 +13,7 @@ from unittest.mock import patch
 from aegisagent.config import runtime_paths
 from aegisagent.core.memory import MemoryStore
 from aegisagent.core.setup_state import setup_wizard_preferences
+from aegisagent.core.skills import SkillLoader
 from aegisagent.core.subagents import BackgroundJobStore
 from aegisagent.core.tasks import TaskRunner, TaskStore
 from aegisagent.tui.interactive import SLASH_COMMANDS, _CursesAegisAgent, build_interactive_panels, dispatch_interactive_command, normalize_interactive_command, slash_palette_candidates
@@ -661,6 +662,32 @@ class TuiRendererTests(unittest.TestCase):
         by_name = {skill["name"]: skill for skill in payload["skills"]}
         self.assertEqual(by_name["safe"]["trust_score"], 100)
         self.assertEqual(by_name["danger"]["trust_level"], "quarantined")
+
+    def test_interactive_dispatch_skills_surfaces_manifest_metadata(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = runtime_paths(tmp)
+            home = Path(tmp) / "home"
+            home.mkdir()
+            skill_root = paths.skills_dir / "safe"
+            skill_root.mkdir(parents=True)
+            (skill_root / "SKILL.md").write_text("---\nname: safe\ndescription: clean\n---\nUse local notes only.\n", encoding="utf-8")
+            bundle_hash = SkillLoader([paths.skills_dir]).trust_summary()["skills"][0]["trust"]["bundle_sha256"]
+            (skill_root / "aegis-skill-trust.json").write_text(
+                json.dumps({"schema_version": 1, "kind": "aegis.skill.trust", "algorithm": "sha256-bundle-v1", "bundle_sha256": bundle_hash}, sort_keys=True),
+                encoding="utf-8",
+            )
+
+            output = io.StringIO()
+            with patch("aegisagent.tui.interactive.Path.home", return_value=home), contextlib.redirect_stdout(output):
+                result = dispatch_interactive_command("/skills", paths)
+            audit_text = paths.audit_jsonl.read_text(encoding="utf-8")
+
+        self.assertEqual(result, "skills")
+        payload = json.loads(output.getvalue())
+        self.assertEqual(payload["skills"][0]["manifest_status"], "checksum_valid")
+        self.assertFalse(payload["execution_performed"])
+        self.assertIn("skill_verifications", audit_text)
+        self.assertIn("checksum_valid", audit_text)
 
     def test_interactive_dispatch_web_fetch_requires_approval(self):
         with tempfile.TemporaryDirectory() as tmp:
