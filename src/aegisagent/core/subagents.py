@@ -156,6 +156,18 @@ def _default_tool_budget_policy(role: str) -> dict[str, Any]:
     }
 
 
+def _validate_requested_depth(requested_depth: int, limits: SubagentLimits) -> int:
+    try:
+        depth = int(requested_depth)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("requested delegation depth must be an integer") from exc
+    if depth < 1:
+        raise ValueError("requested delegation depth must be at least 1")
+    if depth > limits.max_depth:
+        raise ValueError(f"requested delegation depth exceeds limit {limits.max_depth}")
+    return depth
+
+
 def _profile_contract(role: str) -> dict[str, Any]:
     profile = _profile_for(role)
     return {
@@ -570,6 +582,8 @@ class SubagentDelegationResult:
             "workers": [worker.to_dict() for worker in self.workers],
             "receipt_id": self.receipt_id,
             "announce_back": self.announce_back,
+            "requested_depth": max([self.root.depth, *(worker.depth for worker in self.workers)], default=self.root.depth) or 1,
+            "nested_worker_count": sum(1 for worker in self.workers if worker.parent_id and worker.parent_id != self.root.id),
             "artifact_count": len(artifacts),
             "generated_artifact_count": len(artifacts),
             "reused_artifact_count": len(reused_artifact_ids),
@@ -592,6 +606,10 @@ class SubagentDelegationResult:
         route = _delegation_route_summary(self.workers)
         if route:
             lines.append(f"model: {route}")
+        requested_depth = max([self.root.depth, *(worker.depth for worker in self.workers)], default=self.root.depth) or 1
+        nested_worker_count = sum(1 for worker in self.workers if worker.parent_id and worker.parent_id != self.root.id)
+        if requested_depth > 1:
+            lines.append(f"depth: requested={requested_depth} nested_workers={nested_worker_count}")
         if self.artifacts:
             lines.append(f"artifacts: {len(self.artifacts)} durable role artifacts")
         for worker in self.workers:
@@ -632,6 +650,7 @@ class BackgroundJobRecord:
     summary: str = ""
     reusable_artifact_ids: list[str] = field(default_factory=list)
     artifact_reuse_approved: bool = False
+    requested_depth: int = 1
     created_at: str = field(default_factory=utc_now)
     updated_at: str = field(default_factory=utc_now)
     started_at: str = ""
@@ -649,6 +668,7 @@ class BackgroundJobRecord:
             "reusable_artifact_ids": self.reusable_artifact_ids,
             "artifact_reuse_approved": self.artifact_reuse_approved,
             "reusable_artifact_count": len(self.reusable_artifact_ids),
+            "requested_depth": self.requested_depth,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
             "started_at": self.started_at,
@@ -667,6 +687,7 @@ class BackgroundJobRecord:
             summary=str(data.get("summary") or ""),
             reusable_artifact_ids=[str(item) for item in data.get("reusable_artifact_ids", [])],
             artifact_reuse_approved=bool(data.get("artifact_reuse_approved")),
+            requested_depth=int(data.get("requested_depth") or 1),
             created_at=str(data.get("created_at") or utc_now()),
             updated_at=str(data.get("updated_at") or utc_now()),
             started_at=str(data.get("started_at") or ""),
@@ -685,12 +706,14 @@ class BackgroundJobStore:
         *,
         reusable_artifact_ids: tuple[str, ...] | list[str] = (),
         reuse_approved: bool = False,
+        requested_depth: int = 1,
     ) -> BackgroundJobRecord:
         record = BackgroundJobRecord(
             id=uuid4().hex[:10],
             task=task,
             reusable_artifact_ids=[str(artifact_id) for artifact_id in reusable_artifact_ids],
             artifact_reuse_approved=bool(reuse_approved and reusable_artifact_ids),
+            requested_depth=requested_depth,
         )
         self.save(record)
         return record
@@ -730,11 +753,14 @@ class LocalSubagentOrchestrator:
         parent_session_id: str = "main",
         reusable_artifact_ids: tuple[str, ...] | list[str] = (),
         reuse_approved: bool = False,
+        requested_depth: int = 1,
         event_sink: Callable[[SubagentEvent], None] | None = None,
     ) -> SubagentDelegationResult:
+        requested_depth = _validate_requested_depth(requested_depth, self.limits)
         reusable_ids = _normalize_reusable_artifact_ids(reusable_artifact_ids)
         reused_artifacts = _validated_reused_artifacts(self.store, reusable_ids, reuse_approved=bool(reuse_approved))
         queue = SubagentQueue(self.limits)
+        nested_worker_count = 1 if requested_depth == 2 else 0
         root_session = self.sessions.create(f"subagent root {task[:32]}")
         root = queue.spawn(task, role="coordinator", session_id=root_session.id)
         root.input_artifacts = [artifact["id"] for artifact in reused_artifacts]
@@ -753,6 +779,8 @@ class LocalSubagentOrchestrator:
                 "parent_session_id": parent_session_id,
                 "limits": self.limits.__dict__,
                 "contract_version": AGENT_CONTRACT_VERSION,
+                "requested_depth": requested_depth,
+                "nested_worker_count": nested_worker_count,
                 "worker_contracts": [_profile_contract(role) for role in ("planner", "researcher", "implementer", "reviewer")],
                 "reused_artifact_ids": [artifact["id"] for artifact in reused_artifacts],
                 "reused_artifact_count": len(reused_artifacts),
@@ -788,13 +816,14 @@ class LocalSubagentOrchestrator:
                 },
             )
 
-        workers: list[SubagentRecord] = []
-        for role in ("planner", "researcher", "implementer", "reviewer"):
+        workers_by_role: dict[str, SubagentRecord] = {}
+        for role in ("planner", "researcher", "implementer"):
             child_session = self.sessions.create(f"subagent {role} {task[:24]}")
             child = queue.spawn(task, parent_id=root.id, role=role, session_id=child_session.id)
             child.status = "running"
             contract = _profile_contract(role)
             self.store.save(child)
+            self.store.save(root)
             self._event(events, root.id, "worker.started", f"{role} started", role=role, worker_id=child.id, event_sink=event_sink)
             self.audit.append(
                 "subagent.worker.started",
@@ -802,17 +831,46 @@ class LocalSubagentOrchestrator:
                     "root_id": root.id,
                     "worker_id": child.id,
                     "role": role,
+                    "parent_id": child.parent_id,
+                    "depth": child.depth,
+                    "requested_depth": requested_depth,
                     "contract_version": AGENT_CONTRACT_VERSION,
                     "contract": contract,
                     "external_action_started": False,
                 },
             )
-            workers.append(child)
+            workers_by_role[role] = child
+
+        reviewer_parent_id = workers_by_role["implementer"].id if requested_depth == 2 else root.id
+        child_session = self.sessions.create(f"subagent reviewer {task[:24]}")
+        reviewer = queue.spawn(task, parent_id=reviewer_parent_id, role="reviewer", session_id=child_session.id)
+        reviewer.status = "running"
+        contract = _profile_contract("reviewer")
+        self.store.save(reviewer)
+        if requested_depth == 2:
+            self.store.save(workers_by_role["implementer"])
+        else:
+            self.store.save(root)
+        self._event(events, root.id, "worker.started", "reviewer started", role="reviewer", worker_id=reviewer.id, event_sink=event_sink)
+        self.audit.append(
+            "subagent.worker.started",
+            {
+                "root_id": root.id,
+                "worker_id": reviewer.id,
+                "role": "reviewer",
+                "parent_id": reviewer.parent_id,
+                "depth": reviewer.depth,
+                "requested_depth": requested_depth,
+                "contract_version": AGENT_CONTRACT_VERSION,
+                "contract": contract,
+                "external_action_started": False,
+            },
+        )
+        workers_by_role["reviewer"] = reviewer
 
         max_workers = max(1, min(2, self.limits.max_concurrency - 1))
         completed: dict[str, SubagentWorkerResult] = {}
-        workers_by_role = {worker.role: worker for worker in workers}
-        workers = []
+        workers: list[SubagentRecord] = []
         context_artifacts: list[dict[str, Any]] = list(reused_artifacts)
         generated_artifacts: list[dict[str, Any]] = []
 
@@ -838,6 +896,9 @@ class LocalSubagentOrchestrator:
                             "tool_budget": contract["tool_budget"],
                             "tool_budget_policy": contract["tool_budget_policy"],
                             "stage": stage_index,
+                            "parent_id": worker.parent_id,
+                            "depth": worker.depth,
+                            "requested_depth": requested_depth,
                             "input_artifacts": worker.input_artifacts,
                             "input_artifact_count": len(worker.input_artifacts),
                         },
@@ -881,6 +942,9 @@ class LocalSubagentOrchestrator:
                         "root_id": root.id,
                         "worker_id": child.id,
                         "role": child.role,
+                        "parent_id": child.parent_id,
+                        "depth": child.depth,
+                        "requested_depth": requested_depth,
                         "status": child.status,
                         "contract_version": AGENT_CONTRACT_VERSION,
                         "deliverable": contract["deliverable"],
@@ -1000,21 +1064,34 @@ class LocalSubagentOrchestrator:
         )
         self._event(events, root.id, "synthesis.completed", f"coordinator synthesized {len(synthesis_artifact['input_artifacts'])} artifact graph nodes", role=root.role, event_sink=event_sink)
 
-        root.children = [worker.id for worker in workers]
+        if requested_depth == 2:
+            root.children = [workers_by_role[role].id for role in ("planner", "researcher", "implementer")]
+            self.store.save(workers_by_role["implementer"])
+        else:
+            root.children = [worker.id for worker in workers]
         root.summary = f"{len(workers)} model-backed local subagents completed bounded analysis with {len(generated_artifacts)} generated artifacts including final synthesis"
         if reused_artifacts:
             root.summary += f" and {len(reused_artifacts)} approved reused artifacts"
         root.summary += f" for: {task}"
         root.status = "completed"
-        self.sessions.append(root.session_id, "assistant", root.summary, metadata={"source": "subagent", "role": root.role, "artifact_ids": [artifact["id"] for artifact in generated_artifacts], "synthesis_artifact_id": synthesis_artifact["id"], "reused_artifact_ids": root.input_artifacts})
+        self.sessions.append(root.session_id, "assistant", root.summary, metadata={"source": "subagent", "role": root.role, "artifact_ids": [artifact["id"] for artifact in generated_artifacts], "synthesis_artifact_id": synthesis_artifact["id"], "reused_artifact_ids": root.input_artifacts, "requested_depth": requested_depth, "nested_worker_count": nested_worker_count})
         self.store.save(root)
         self._event(events, root.id, "root.completed", root.summary, role=root.role, event_sink=event_sink)
+        actual_max_depth = max([root.depth, *(worker.depth for worker in workers)], default=root.depth)
+        tree_edges = [{"parent_id": worker.parent_id, "child_id": worker.id, "role": worker.role, "depth": worker.depth} for worker in workers]
         receipt = self.audit.append(
             "subagent.delegation.completed",
             {
                 "root_id": root.id,
                 "worker_ids": [worker.id for worker in workers],
                 "worker_roles": [worker.role for worker in workers],
+                "worker_depths": [worker.depth for worker in workers],
+                "worker_parent_ids": [worker.parent_id for worker in workers],
+                "root_child_ids": root.children,
+                "requested_depth": requested_depth,
+                "actual_max_depth": actual_max_depth,
+                "nested_worker_count": nested_worker_count,
+                "tree_edges": tree_edges,
                 "worker_providers": [worker.provider for worker in workers],
                 "worker_provider_modes": [worker.provider_mode for worker in workers],
                 "worker_provider_route_statuses": [worker.provider_route_status for worker in workers],
@@ -1091,18 +1168,21 @@ class LocalSubagentOrchestrator:
         *,
         reusable_artifact_ids: tuple[str, ...] | list[str] = (),
         reuse_approved: bool = False,
+        requested_depth: int = 1,
     ) -> BackgroundJobRecord:
         jobs = BackgroundJobStore(self.paths)
+        requested_depth = _validate_requested_depth(requested_depth, self.limits)
         reusable_ids = _normalize_reusable_artifact_ids(reusable_artifact_ids)
         if reusable_ids:
             _validated_reused_artifacts(self.store, reusable_ids, reuse_approved=bool(reuse_approved))
-        record = jobs.create(task, reusable_artifact_ids=reusable_ids, reuse_approved=bool(reuse_approved))
+        record = jobs.create(task, reusable_artifact_ids=reusable_ids, reuse_approved=bool(reuse_approved), requested_depth=requested_depth)
         if os.environ.get("AEGISAGENT_BACKGROUND_NO_SPAWN"):
             self.audit.append(
                 "subagent.background.queued",
                 {
                     "job_id": record.id,
                     "task": task,
+                    "requested_depth": record.requested_depth,
                     "reusable_artifact_ids": record.reusable_artifact_ids,
                     "reusable_artifact_count": len(record.reusable_artifact_ids),
                     "artifact_reuse_approved": record.artifact_reuse_approved,
@@ -1138,6 +1218,7 @@ class LocalSubagentOrchestrator:
                 "job_id": record.id,
                 "pid": record.pid,
                 "task": task,
+                "requested_depth": record.requested_depth,
                 "reusable_artifact_ids": record.reusable_artifact_ids,
                 "reusable_artifact_count": len(record.reusable_artifact_ids),
                 "artifact_reuse_approved": record.artifact_reuse_approved,
@@ -1166,6 +1247,7 @@ class LocalSubagentOrchestrator:
                 record.task,
                 reusable_artifact_ids=record.reusable_artifact_ids,
                 reuse_approved=record.artifact_reuse_approved,
+                requested_depth=record.requested_depth,
             )
             record.status = "completed"
             record.pid = None
@@ -1180,6 +1262,7 @@ class LocalSubagentOrchestrator:
                     "job_id": record.id,
                     "root_id": record.root_id,
                     "receipt_id": record.receipt_id,
+                    "requested_depth": record.requested_depth,
                     "reusable_artifact_ids": record.reusable_artifact_ids,
                     "reusable_artifact_count": len(record.reusable_artifact_ids),
                     "artifact_reuse_approved": record.artifact_reuse_approved,
@@ -1284,6 +1367,9 @@ def format_delegation(result: SubagentDelegationResult) -> str:
     route = _delegation_route_summary(result.workers)
     if route:
         lines.append(f"model     {route}")
+    requested_depth = max([result.root.depth, *(worker.depth for worker in result.workers)], default=result.root.depth) or 1
+    nested_worker_count = sum(1 for worker in result.workers if worker.parent_id and worker.parent_id != result.root.id)
+    lines.append(f"depth     requested={requested_depth} nested_workers={nested_worker_count}")
     artifacts = result.artifacts
     if artifacts:
         lines.append(f"artifacts {len(artifacts)} durable role artifacts")
@@ -1452,6 +1538,7 @@ def format_background_job(record: BackgroundJobRecord) -> str:
     lines = [
         "SUBAGENT BACKGROUND JOB",
         f"job       {record.id}  {record.status}",
+        f"depth     requested={record.requested_depth}",
         f"task      {record.task}",
     ]
     if record.reusable_artifact_ids:
@@ -1470,7 +1557,7 @@ def format_background_job(record: BackgroundJobRecord) -> str:
 def format_background_jobs(records: list[dict[str, Any]]) -> str:
     if not records:
         return "SUBAGENT BACKGROUND JOBS\nNo background jobs yet. Use /subagents bg <task>."
-    lines = ["SUBAGENT BACKGROUND JOBS", "status      job         pid        root        reuse  task"]
+    lines = ["SUBAGENT BACKGROUND JOBS", "status      job         pid        root        reuse depth task"]
     for record in records[:20]:
         pid = str(record.get("pid") or "-")
         root = str(record.get("root_id") or "-")
@@ -1478,7 +1565,8 @@ def format_background_jobs(records: list[dict[str, Any]]) -> str:
         task = str(record.get("task") or "")
         if len(task) > 42:
             task = task[:39] + "..."
-        lines.append(f"{record.get('status', ''):<11} {record.get('id', ''):<11} {pid:<10} {root:<11} {reuse:<6} {task}")
+        depth = str(record.get("requested_depth") or 1)
+        lines.append(f"{record.get('status', ''):<11} {record.get('id', ''):<11} {pid:<10} {root:<11} {reuse:<5} {depth:<5} {task}")
     return "\n".join(lines)
 
 

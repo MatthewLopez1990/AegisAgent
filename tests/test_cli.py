@@ -1961,6 +1961,28 @@ class CliTests(unittest.TestCase):
             self.assertEqual(stopped.returncode, 0, stopped.stderr)
             self.assertEqual(len(json.loads(stopped.stdout)["stopped"]), 5)
 
+    def test_cli_depth_two_nests_reviewer_for_agent_surfaces(self):
+        invocations = (
+            ("subagents", "--delegate", "depth two topology", "--depth", "2"),
+            ("agents", "delegate", "depth two topology", "--depth", "2"),
+        )
+        for invocation in invocations:
+            with self.subTest(invocation=invocation):
+                with tempfile.TemporaryDirectory() as tmp:
+                    result = run_cli(*invocation, cwd=tmp)
+
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    payload = json.loads(result.stdout)
+                    self.assertEqual(payload["requested_depth"], 2)
+                    self.assertEqual(payload["nested_worker_count"], 1)
+                    workers = {worker["role"]: worker for worker in payload["workers"]}
+                    self.assertEqual([worker["role"] for worker in payload["workers"]], ["planner", "researcher", "implementer", "reviewer"])
+                    self.assertEqual([worker["depth"] for worker in payload["workers"]], [1, 1, 1, 2])
+                    self.assertEqual(payload["root"]["children"], [workers["planner"]["id"], workers["researcher"]["id"], workers["implementer"]["id"]])
+                    self.assertEqual(workers["implementer"]["children"], [workers["reviewer"]["id"]])
+                    self.assertEqual(workers["reviewer"]["parent_id"], workers["implementer"]["id"])
+                    self.assertEqual(workers["reviewer"]["input_artifacts"], [workers["planner"]["artifacts"][0]["id"], workers["researcher"]["artifacts"][0]["id"], workers["implementer"]["artifacts"][0]["id"]])
+
     def test_subagents_cli_reuses_artifact_only_after_approval_and_audits_safety_flags(self):
         with tempfile.TemporaryDirectory() as tmp:
             first = run_cli("subagents", "--delegate", "seed reusable context", cwd=tmp)

@@ -214,23 +214,23 @@ SLASH_COMMANDS: tuple[tuple[str, str], ...] = (
     ("/subagents artifacts search", "search durable role artifacts"),
     ("/subagents synthesis", "show coordinator final synthesis for a root delegation"),
     ("/subagents graph", "show coordinator artifact graph for a root delegation"),
-    ("/subagents live", "delegate and stream local worker progress; add | use-artifact <id> | approve to reuse approved context"),
-    ("/subagents bg", "start background subagent work; add | use-artifact <id> | approve to reuse approved context"),
+    ("/subagents live", "delegate and stream local worker progress; add | depth 2 for opt-in nested review or | use-artifact <id> | approve"),
+    ("/subagents bg", "start background subagent work; add | depth 2 for opt-in nested review or | use-artifact <id> | approve"),
     ("/subagents monitor", "live repaint background subagent job progress"),
     ("/subagents unwatch", "stop the active subagent job monitor"),
     ("/subagents recover", "mark stale background subagent jobs failed"),
     ("/agents", "show Hermes-style agent status backed by local subagents"),
     ("/agents profiles", "show planner/researcher/implementer/reviewer profiles"),
     ("/agents contracts", "show role context contracts, deliverables, and budgets"),
-    ("/agents delegate", "run bounded local planner/researcher/implementer/reviewer agents; add | use-artifact <id> | approve to reuse approved context"),
+    ("/agents delegate", "run bounded local planner/researcher/implementer/reviewer agents; add | depth 2 for opt-in nested review or | use-artifact <id> | approve"),
     ("/agents artifacts", "list durable role artifacts"),
     ("/agents artifacts show", "show one durable role artifact"),
     ("/agents artifacts search", "search durable role artifacts"),
     ("/agents synthesis", "show coordinator final synthesis for a root delegation"),
     ("/agents graph", "show coordinator artifact graph for a root delegation"),
-    ("/agents live", "delegate and stream Hermes-style local agent progress; add | use-artifact <id> | approve to reuse approved context"),
+    ("/agents live", "delegate and stream Hermes-style local agent progress; add | depth 2 for opt-in nested review or | use-artifact <id> | approve"),
     ("/agents stream", "alias for /agents live"),
-    ("/agents bg", "start background agent work; add | use-artifact <id> | approve to reuse approved context"),
+    ("/agents bg", "start background agent work; add | depth 2 for opt-in nested review or | use-artifact <id> | approve"),
     ("/agents jobs", "list background agent jobs"),
     ("/agents monitor", "live repaint background agent job progress"),
     ("/agents unwatch", "stop the active agent job monitor"),
@@ -417,8 +417,10 @@ COMMAND_MENU_GROUPS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
             ("/subagents synthesis <root-id>", "show coordinator final synthesis"),
             ("/subagents graph <root-id>", "show coordinator artifact graph"),
             ("/subagents live <task>", "delegate and stream bounded workers"),
+            ("/subagents live <task> | depth 2", "delegate with opt-in nested reviewer topology"),
             ("/subagents live <task> | use-artifact <id> | approve", "delegate and stream bounded workers with approved prior context"),
             ("/subagents bg <task>", "start background subagent work"),
+            ("/subagents bg <task> | depth 2", "start background subagent work with opt-in nested reviewer topology"),
             ("/subagents bg <task> | use-artifact <id> | approve", "start background subagent work with approved prior context"),
             ("/subagents monitor <job-id>", "live repaint background subagent progress"),
             ("/subagents unwatch", "stop active subagent job monitor"),
@@ -426,6 +428,7 @@ COMMAND_MENU_GROUPS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
             ("/agents", "show Hermes-style agent status"),
             ("/agents contracts", "show role context contracts and budgets"),
             ("/agents delegate <task>", "delegate to named local agent profiles"),
+            ("/agents delegate <task> | depth 2", "delegate with opt-in nested reviewer topology"),
             ("/agents delegate <task> | use-artifact <id> | approve", "delegate to named local agent profiles with approved prior context"),
             ("/agents artifacts", "list durable role artifacts"),
             ("/agents artifacts show <artifact-id>", "show one durable role artifact"),
@@ -433,9 +436,11 @@ COMMAND_MENU_GROUPS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
             ("/agents synthesis <root-id>", "show coordinator final synthesis"),
             ("/agents graph <root-id>", "show coordinator artifact graph"),
             ("/agents live <task>", "stream Hermes-style role-worker progress"),
+            ("/agents live <task> | depth 2", "stream agents with opt-in nested reviewer topology"),
             ("/agents live <task> | use-artifact <id> | approve", "stream agents with approved prior context"),
             ("/agents stream <task>", "alias for /agents live <task>"),
             ("/agents bg <task>", "start background agent work"),
+            ("/agents bg <task> | depth 2", "start background agent work with opt-in nested reviewer topology"),
             ("/agents bg <task> | use-artifact <id> | approve", "start background agent work with approved prior context"),
             ("/agents jobs", "list background agent jobs"),
             ("/agents monitor <job-id>", "live repaint background agent progress"),
@@ -784,7 +789,7 @@ class _CursesAegisAgent:
         session_label = sessions[0]["id"] if sessions else "main"
         rows = [
             f"session {session_label} | provider local/terminal-v0 | audit {'ok' if audit['ok'] else 'review'} ({audit['count']} receipts)",
-            f"tools {counts['enabled']} on / {counts['ask']} ask | subagents 8x depth 2 | web optional, never auto-started",
+            f"tools {counts['enabled']} on / {counts['ask']} ask | subagents opt-in depth<=2 | web optional, never auto-started",
             "try: /commands  /dashboard  /capabilities  /improve  /git status  /agents bg <task>",
         ]
         border = "-" * max(1, width - 1)
@@ -858,7 +863,7 @@ class _CursesAegisAgent:
             self.message = "Agent job monitor stopped."
             self.output_lines = [f"$ {normalized}", "", "Agent job monitor stopped. Composer remains active."]
             return
-        if normalized.startswith("/subagents live ") or normalized.startswith("/agents live ") or normalized.startswith("/agents stream "):
+        if normalized.startswith("/subagents live ") or normalized.startswith("/subagents stream ") or normalized.startswith("/agents live ") or normalized.startswith("/agents stream "):
             task = normalized.split(maxsplit=2)[2].strip()
             self._run_live_subagents(task, command=normalized.rsplit(task, 1)[0].strip() + f" {task}")
             return
@@ -884,7 +889,13 @@ class _CursesAegisAgent:
         self.message = f"Opened: {normalized}"
 
     def _run_live_subagents(self, task: str, *, command: str = "/subagents live") -> None:
-        task, artifact_ids, approved = _parse_artifact_reuse_directive(task)
+        try:
+            task, artifact_ids, approved, requested_depth = _parse_artifact_reuse_directive(task)
+        except ValueError as exc:
+            self.output_lines = [f"$ {command}", "", f"Delegation blocked: {exc}"]
+            self.message = "Delegation blocked."
+            self._render()
+            return
         if not task:
             self.output_lines = [f"$ {command}", "", f"Usage: {command} <task>"]
             self.message = "Add a task to stream agent work."
@@ -899,7 +910,7 @@ class _CursesAegisAgent:
             self._render()
 
         try:
-            result = LocalSubagentOrchestrator(self.paths).delegate(task, reusable_artifact_ids=artifact_ids, reuse_approved=approved, event_sink=sink)
+            result = LocalSubagentOrchestrator(self.paths).delegate(task, reusable_artifact_ids=artifact_ids, reuse_approved=approved, requested_depth=requested_depth, event_sink=sink)
         except (KeyError, ValueError) as exc:
             self.output_lines = [f"$ {command}", "", f"Delegation blocked: {exc}"]
             self.message = "Delegation blocked."
@@ -1070,11 +1081,12 @@ class _CursesAegisAgent:
             return 0
 
 
-def _parse_artifact_reuse_directive(raw: str) -> tuple[str, list[str], bool]:
+def _parse_artifact_reuse_directive(raw: str) -> tuple[str, list[str], bool, int]:
     parts = [part.strip() for part in raw.split("|")]
     prompt = parts[0].strip() if parts else ""
     artifact_ids: list[str] = []
     approved = False
+    requested_depth = 1
     for part in parts[1:]:
         lowered = part.lower()
         if lowered in {"approve", "approved"}:
@@ -1083,17 +1095,27 @@ def _parse_artifact_reuse_directive(raw: str) -> tuple[str, list[str], bool]:
         if lowered.startswith("use-artifact ") or lowered.startswith("artifact ") or lowered.startswith("artifacts "):
             values = part.split(maxsplit=1)[1] if " " in part else ""
             artifact_ids.extend(item.strip() for item in values.replace(",", " ").split() if item.strip())
-    return prompt, list(dict.fromkeys(artifact_ids)), approved
+            continue
+        if lowered.startswith("depth "):
+            value = part.split(maxsplit=1)[1] if " " in part else ""
+            try:
+                requested_depth = int(value)
+            except ValueError as exc:
+                raise ValueError("depth directive must be 1 or 2") from exc
+            if requested_depth not in {1, 2}:
+                raise ValueError("depth directive must be 1 or 2")
+            continue
+    return prompt, list(dict.fromkeys(artifact_ids)), approved, requested_depth
 
 
 def _delegate_with_reuse(orchestrator: LocalSubagentOrchestrator, task: str) -> Any:
-    prompt, artifact_ids, approved = _parse_artifact_reuse_directive(task)
-    return orchestrator.delegate(prompt, reusable_artifact_ids=artifact_ids, reuse_approved=approved)
+    prompt, artifact_ids, approved, requested_depth = _parse_artifact_reuse_directive(task)
+    return orchestrator.delegate(prompt, reusable_artifact_ids=artifact_ids, reuse_approved=approved, requested_depth=requested_depth)
 
 
 def _start_background_with_reuse(orchestrator: LocalSubagentOrchestrator, task: str) -> Any:
-    prompt, artifact_ids, approved = _parse_artifact_reuse_directive(task)
-    return orchestrator.start_background(prompt, reusable_artifact_ids=artifact_ids, reuse_approved=approved)
+    prompt, artifact_ids, approved, requested_depth = _parse_artifact_reuse_directive(task)
+    return orchestrator.start_background(prompt, reusable_artifact_ids=artifact_ids, reuse_approved=approved, requested_depth=requested_depth)
 
 
 def dispatch_interactive_command(command: str, paths: RuntimePaths) -> str:
@@ -1864,9 +1886,9 @@ def dispatch_interactive_command(command: str, paths: RuntimePaths) -> str:
             print(format_background_jobs([record.to_dict() for record in recovered]) if recovered else "No stale running subagent jobs found.")
         elif task.startswith("cancel "):
             print(format_background_job(orchestrator.cancel_background(task.removeprefix("cancel ").strip())))
-        elif task.startswith("live "):
+        elif task.startswith("live ") or task.startswith("stream "):
             try:
-                result = _delegate_with_reuse(orchestrator, task.removeprefix("live ").strip())
+                result = _delegate_with_reuse(orchestrator, task.split(maxsplit=1)[1] if " " in task else "")
             except (KeyError, ValueError) as exc:
                 print(f"Delegation blocked: {exc}")
                 return "subagents"
@@ -1884,7 +1906,7 @@ def dispatch_interactive_command(command: str, paths: RuntimePaths) -> str:
         elif task in {"", "list"}:
             print(format_subagent_records(SubagentStore(paths).list()))
             print("")
-            print("usage: /subagents <task> | /subagents artifacts | /subagents artifacts show <artifact-id> | /subagents artifacts search <query> | /subagents live <task> | /subagents bg <task> | use-artifact <id> | approve | /subagents jobs | /subagents job <job-id> | /subagents monitor <job-id> | /subagents unwatch | /subagents cancel <job-id>")
+            print("usage: /subagents <task> | depth 2 | use-artifact <id> | approve | /subagents live <task> | depth 2 | /subagents bg <task> | depth 2 | /subagents artifacts | /subagents artifacts show <artifact-id> | /subagents artifacts search <query> | /subagents jobs | /subagents job <job-id> | /subagents monitor <job-id> | /subagents unwatch | /subagents cancel <job-id>")
         else:
             if task.startswith("delegate "):
                 task = task.removeprefix("delegate ").strip()
@@ -2282,7 +2304,7 @@ def _initial_output_lines(paths: RuntimePaths, *, setup_open: bool = False) -> l
         "",
         f"Workspace: {paths.workspace}",
         f"Sandbox: {sandbox.backend} ({sandbox.rationale})",
-        "Hermes-class loop, real tools, and multi-agent execution remain active build checkpoints.",
+        "Hermes-class loops, real tools, and multi-agent execution are staged, operator-approved build targets.",
         ]
     )
     return lines

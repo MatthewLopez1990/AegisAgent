@@ -265,6 +265,9 @@ denied tool groups, max tool calls, max artifacts, edit/test/network flags, and
 external-delivery denial. These budgets are contract and audit controls; file,
 git, browser, connector, memory, and external-state mutations still go through
 the typed approval policy.
+Depth 2 is opt-in: `--depth 2` nests the reviewer under the implementer for a
+bounded review topology. It is not arbitrary recursive spawning, autonomous
+fan-out, or a global worker pool.
 
 Artifact browsing is read-only by default. `aegis agents artifacts` lists
 durable role artifacts, `show` reads redacted artifact content, and `search`
@@ -436,13 +439,13 @@ ledger rows, connector metadata with a redacted approval-bound outbox, memory
 review controls, passive skill trust metadata, and local agent/subagent
 orchestration with provider fallback metadata, durable role artifacts,
 artifact list/show/search, structured role-specific tool budget policies,
-stage-to-stage handoff metadata, approval-gated reuse of selected prior artifacts
-as bounded summary context, approval-gated detached-job artifact reuse, and
-coordinator final synthesis over artifact graphs.
+stage-to-stage handoff metadata, opt-in depth-2 reviewer nesting,
+approval-gated reuse of selected prior artifacts as bounded summary context,
+approval-gated detached-job artifact reuse, and coordinator final synthesis over
+artifact graphs.
 
 Partial: web console parity, live connectors, self-improvement, richer browser
-automation, multi-provider fallback ordering, subscription bridge readiness,
-higher-depth delegation controls.
+automation, multi-provider fallback ordering, and subscription bridge readiness.
 
-Next: higher-depth delegation controls, live browser control behind explicit
-approval, broader integrations, signed skill trust, and packaged release flows.
+Next: richer execution backends, live browser control behind explicit approval,
+broader integrations, signed skill trust, and packaged release flows.

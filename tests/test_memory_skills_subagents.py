@@ -357,6 +357,11 @@ class MemorySkillsSubagentTests(unittest.TestCase):
             self.assertEqual(result.root.status, "completed")
             self.assertEqual(len(result.workers), 4)
             self.assertEqual([worker.role for worker in result.workers], ["planner", "researcher", "implementer", "reviewer"])
+            self.assertEqual([worker.depth for worker in result.workers], [1, 1, 1, 1])
+            self.assertEqual([worker.parent_id for worker in result.workers], [result.root.id] * 4)
+            self.assertEqual(result.root.children, [worker.id for worker in result.workers])
+            self.assertEqual(result.to_dict()["requested_depth"], 1)
+            self.assertEqual(result.to_dict()["nested_worker_count"], 0)
             stored = SubagentStore(paths).list()
             self.assertEqual(len(stored), 5)
             self.assertTrue(all(record["session_id"] for record in stored))
@@ -376,6 +381,11 @@ class MemorySkillsSubagentTests(unittest.TestCase):
             self.assertEqual(receipt["id"], result.receipt_id)
             self.assertEqual(receipt["event_type"], "subagent.delegation.completed")
             self.assertEqual(receipt["payload"]["worker_roles"], ["planner", "researcher", "implementer", "reviewer"])
+            self.assertEqual(receipt["payload"]["requested_depth"], 1)
+            self.assertEqual(receipt["payload"]["actual_max_depth"], 1)
+            self.assertEqual(receipt["payload"]["nested_worker_count"], 0)
+            self.assertEqual(receipt["payload"]["worker_depths"], [1, 1, 1, 1])
+            self.assertEqual(receipt["payload"]["worker_parent_ids"], [result.root.id] * 4)
             self.assertEqual(receipt["payload"]["worker_providers"], ["local/terminal-v0"] * 4)
             self.assertEqual(receipt["payload"]["worker_usage_ids"], [worker.usage_id for worker in result.workers])
             self.assertEqual(receipt["payload"]["artifact_count"], 5)
@@ -453,6 +463,7 @@ class MemorySkillsSubagentTests(unittest.TestCase):
             self.assertEqual(planner_messages[0]["metadata"]["contract_version"], AGENT_CONTRACT_VERSION)
             self.assertIn("context_contract", planner_messages[0]["metadata"])
             self.assertIn("tool_budget_policy", planner_messages[0]["metadata"])
+
             self.assertEqual(planner_messages[0]["metadata"]["tool_budget_policy"]["max_tool_calls"], 8)
             self.assertFalse(planner_messages[0]["metadata"]["tool_budget_policy"]["may_edit"])
             self.assertIn("read", planner_messages[0]["metadata"]["tool_budget_policy"]["allowed_tool_groups"])
@@ -490,6 +501,58 @@ class MemorySkillsSubagentTests(unittest.TestCase):
             self.assertEqual(sum(1 for event in events if event.event == "worker.started"), 4)
             self.assertIn("synthesis.completed", [event.event for event in events])
             self.assertIn("SUBAGENT TIMELINE", format_events(events))
+
+    def test_local_subagent_orchestrator_depth_two_nests_reviewer(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = runtime_paths(tmp)
+            orchestrator = LocalSubagentOrchestrator(paths)
+
+            result = orchestrator.delegate("review implementation at depth two", requested_depth=2)
+
+            self.assertEqual([worker.role for worker in result.workers], ["planner", "researcher", "implementer", "reviewer"])
+            self.assertEqual([worker.depth for worker in result.workers], [1, 1, 1, 2])
+            self.assertEqual(result.to_dict()["requested_depth"], 2)
+            self.assertEqual(result.to_dict()["nested_worker_count"], 1)
+            workers = {worker.role: worker for worker in result.workers}
+            root = SubagentStore(paths).get(result.root.id)
+            implementer = SubagentStore(paths).get(workers["implementer"].id)
+            reviewer = SubagentStore(paths).get(workers["reviewer"].id)
+            self.assertEqual(root.children, [workers["planner"].id, workers["researcher"].id, workers["implementer"].id])
+            self.assertNotIn(workers["reviewer"].id, root.children)
+            self.assertEqual(implementer.children, [workers["reviewer"].id])
+            self.assertEqual(reviewer.parent_id, workers["implementer"].id)
+            self.assertEqual(reviewer.depth, 2)
+            planner_artifact = workers["planner"].artifacts[0]["id"]
+            researcher_artifact = workers["researcher"].artifacts[0]["id"]
+            implementer_artifact = workers["implementer"].artifacts[0]["id"]
+            self.assertEqual(workers["reviewer"].input_artifacts, [planner_artifact, researcher_artifact, implementer_artifact])
+            delegation = format_delegation(result)
+            self.assertIn("depth     requested=2 nested_workers=1", delegation)
+            receipt = AuditLog(paths).recent(1)[0]
+            self.assertEqual(receipt["event_type"], "subagent.delegation.completed")
+            self.assertEqual(receipt["payload"]["requested_depth"], 2)
+            self.assertEqual(receipt["payload"]["actual_max_depth"], 2)
+            self.assertEqual(receipt["payload"]["nested_worker_count"], 1)
+            self.assertEqual(receipt["payload"]["worker_depths"], [1, 1, 1, 2])
+            self.assertEqual(receipt["payload"]["worker_parent_ids"], [result.root.id, result.root.id, result.root.id, workers["implementer"].id])
+            self.assertEqual(receipt["payload"]["tree_edges"][-1]["parent_id"], workers["implementer"].id)
+            stopped = orchestrator.stop(result.root.id)
+            self.assertEqual(len({record.id for record in stopped.stopped}), 5)
+            self.assertEqual(len(stopped.stopped), 5)
+
+            second = LocalSubagentOrchestrator(paths).delegate("stop nested implementer", requested_depth=2)
+            second_workers = {worker.role: worker for worker in second.workers}
+            nested_stop = LocalSubagentOrchestrator(paths).stop(second_workers["implementer"].id)
+            self.assertEqual({record.id for record in nested_stop.stopped}, {second_workers["implementer"].id, second_workers["reviewer"].id})
+
+    def test_local_subagent_orchestrator_rejects_depth_over_limit(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = runtime_paths(tmp)
+
+            with self.assertRaisesRegex(ValueError, "exceeds limit 1"):
+                LocalSubagentOrchestrator(paths, limits=SubagentLimits(max_depth=1)).delegate("too deep", requested_depth=2)
+
+            self.assertEqual(SubagentStore(paths).list(), [])
 
     def test_cross_delegation_artifact_reuse_requires_approval_and_audits_safety_flags(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -628,7 +691,10 @@ class MemorySkillsSubagentTests(unittest.TestCase):
             workers = [SubagentStore(paths).get(child_id) for child_id in root.children]
             self.assertTrue(all(worker.input_artifacts[0] == planner_artifact for worker in workers))
             self.assertIn("reuse     1 approved artifacts", format_background_job(result))
-            self.assertIn(" 1      background from prior", format_background_jobs(BackgroundJobStore(paths).list()))
+            listed_jobs = BackgroundJobStore(paths).list()
+            self.assertEqual(listed_jobs[0]["requested_depth"], 1)
+            self.assertEqual(listed_jobs[0]["reusable_artifact_count"], 1)
+            self.assertIn("background from prior", format_background_jobs(listed_jobs))
 
             audit_rows = [json.loads(line) for line in (paths.state_dir / "audit.jsonl").read_text(encoding="utf-8").splitlines() if line.strip()]
             reuse_receipt = next(row for row in audit_rows if row["event_type"] == "subagent.artifacts.reused")

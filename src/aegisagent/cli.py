@@ -273,12 +273,14 @@ def build_parser() -> argparse.ArgumentParser:
     subagents.add_argument("--artifact-graph", metavar="ROOT_ID", help="Show coordinator artifact graph for a root delegation id.")
     subagents.add_argument("--use-artifact", action="append", default=[], help="Approved prior artifact id to reuse as starting context for --delegate, --stream, or --background.")
     subagents.add_argument("--approved", action="store_true", help="Approve cross-delegation artifact reuse.")
+    subagents.add_argument("--depth", type=int, default=1, choices=(1, 2), help="Requested delegation topology depth for --delegate, --stream, or --background.")
 
     agents = sub.add_parser("agents", help="Hermes-style agent surface backed by governed local subagents.")
-    agents.add_argument("agent_command", nargs="?", default="status", choices=["status", "profiles", "contracts", "delegate", "stream", "background", "bg", "jobs", "job", "monitor", "cancel", "recover", "artifacts", "artifact", "search-artifacts", "synthesis", "graph"], help="Agent command to run.")
+    agents.add_argument("agent_command", nargs="?", default="status", choices=["status", "profiles", "contracts", "delegate", "stream", "live", "background", "bg", "jobs", "job", "monitor", "cancel", "recover", "artifacts", "artifact", "search-artifacts", "synthesis", "graph"], help="Agent command to run.")
     agents.add_argument("agent_args", nargs="*", help="Task text, job id, or root id for the selected agent command.")
     agents.add_argument("--use-artifact", action="append", default=[], help="Approved prior artifact id to reuse as starting context for delegate, stream, or background.")
     agents.add_argument("--approved", action="store_true", help="Approve cross-delegation artifact reuse.")
+    agents.add_argument("--depth", type=int, default=1, choices=(1, 2), help="Requested delegation topology depth for delegate, stream, or background.")
     agents.add_argument("--json", action="store_true", default=argparse.SUPPRESS, help="Emit JSON for status, profiles, and artifact browsing.")
 
     tui = sub.add_parser("tui", help="Launch governed terminal TUI. This is the primary activation path.")
@@ -1128,21 +1130,21 @@ def main(argv: list[str] | None = None) -> int:
         orchestrator = LocalSubagentOrchestrator(paths)
         if args.delegate:
             try:
-                result = orchestrator.delegate(args.delegate, reusable_artifact_ids=args.use_artifact, reuse_approved=args.approved)
+                result = orchestrator.delegate(args.delegate, reusable_artifact_ids=args.use_artifact, reuse_approved=args.approved, requested_depth=args.depth)
             except (KeyError, ValueError) as exc:
                 parser.error(str(exc))
             print(json.dumps(result.to_dict(), indent=2))
         elif args.stream:
             print("SUBAGENT LIVE")
             try:
-                result = orchestrator.delegate(args.stream, reusable_artifact_ids=args.use_artifact, reuse_approved=args.approved, event_sink=lambda event: print(format_event_line(event), flush=True))
+                result = orchestrator.delegate(args.stream, reusable_artifact_ids=args.use_artifact, reuse_approved=args.approved, requested_depth=args.depth, event_sink=lambda event: print(format_event_line(event), flush=True))
             except (KeyError, ValueError) as exc:
                 parser.error(str(exc))
             print("")
             print(json.dumps({"root_id": result.root.id, "receipt_id": result.receipt_id, "status": result.root.status}, indent=2))
         elif args.background:
             try:
-                record = orchestrator.start_background(args.background, reusable_artifact_ids=args.use_artifact, reuse_approved=args.approved)
+                record = orchestrator.start_background(args.background, reusable_artifact_ids=args.use_artifact, reuse_approved=args.approved, requested_depth=args.depth)
             except (KeyError, ValueError) as exc:
                 parser.error(str(exc))
             print(json.dumps(record.to_dict(), indent=2))
@@ -1239,16 +1241,16 @@ def main(argv: list[str] | None = None) -> int:
             if not agent_args:
                 parser.error("agents delegate requires a task")
             try:
-                result = orchestrator.delegate(agent_args, reusable_artifact_ids=args.use_artifact, reuse_approved=args.approved)
+                result = orchestrator.delegate(agent_args, reusable_artifact_ids=args.use_artifact, reuse_approved=args.approved, requested_depth=args.depth)
             except (KeyError, ValueError) as exc:
                 parser.error(str(exc))
             print(json.dumps(result.to_dict(), indent=2))
-        elif command == "stream":
+        elif command in {"stream", "live"}:
             if not agent_args:
-                parser.error("agents stream requires a task")
+                parser.error(f"agents {command} requires a task")
             print("AGENTS LIVE")
             try:
-                result = orchestrator.delegate(agent_args, reusable_artifact_ids=args.use_artifact, reuse_approved=args.approved, event_sink=lambda event: print(format_event_line(event), flush=True))
+                result = orchestrator.delegate(agent_args, reusable_artifact_ids=args.use_artifact, reuse_approved=args.approved, requested_depth=args.depth, event_sink=lambda event: print(format_event_line(event), flush=True))
             except (KeyError, ValueError) as exc:
                 parser.error(str(exc))
             print("")
@@ -1257,7 +1259,7 @@ def main(argv: list[str] | None = None) -> int:
             if not agent_args:
                 parser.error(f"agents {command} requires a task")
             try:
-                record = orchestrator.start_background(agent_args, reusable_artifact_ids=args.use_artifact, reuse_approved=args.approved)
+                record = orchestrator.start_background(agent_args, reusable_artifact_ids=args.use_artifact, reuse_approved=args.approved, requested_depth=args.depth)
             except (KeyError, ValueError) as exc:
                 parser.error(str(exc))
             print(json.dumps(record.to_dict(), indent=2))

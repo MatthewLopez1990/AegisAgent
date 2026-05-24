@@ -1446,6 +1446,19 @@ class TuiRendererTests(unittest.TestCase):
             self.assertNotIn('{"root"', output.getvalue())
             root_id = next(line.split()[1] for line in output.getvalue().splitlines() if line.startswith("root"))
             planner_artifact = next(row["id"] for row in SubagentStore(paths).artifacts() if row["role"] == "planner")
+            depth_output = io.StringIO()
+            with contextlib.redirect_stdout(depth_output):
+                result = dispatch_interactive_command("/subagents improve the terminal shell | depth 2", paths)
+            self.assertEqual(result, "subagents")
+            self.assertIn("depth     requested=2 nested_workers=1", depth_output.getvalue())
+            depth_root_id = next(line.split()[1] for line in depth_output.getvalue().splitlines() if line.startswith("root"))
+            depth_root = SubagentStore(paths).get(depth_root_id)
+            depth_workers = [SubagentStore(paths).get(child_id) for child_id in depth_root.children]
+            implementer = next(worker for worker in depth_workers if worker.role == "implementer")
+            reviewer = SubagentStore(paths).get(implementer.children[0])
+            self.assertEqual(reviewer.role, "reviewer")
+            self.assertEqual(reviewer.depth, 2)
+            self.assertEqual(reviewer.parent_id, implementer.id)
             artifacts = io.StringIO()
             with contextlib.redirect_stdout(artifacts):
                 result = dispatch_interactive_command("/subagents artifacts", paths)

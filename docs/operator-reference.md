@@ -26,6 +26,27 @@ aegis update --approved
 
 `aegisagent` is also installed by the Python package and routes to the same CLI.
 
+## Terminal Install And Update
+
+Install from GitHub on macOS or Linux:
+
+```bash
+/bin/sh -c "$(curl -fsSL https://raw.githubusercontent.com/MatthewLopez1990/AegisAgent/main/scripts/install.sh)"
+export PATH="$HOME/.local/bin:$PATH"
+command -v aegis
+aegis activation
+```
+
+Update an installed checkout from GitHub:
+
+```bash
+aegis update --approved
+```
+
+Use `aegis install` or `/install` to print the installer command again from a
+running copy. Use `aegis update` or `/update` without approval to preview the
+exact `git pull --ff-only origin main` action before mutating the checkout.
+
 ## Aliases And Shortcuts
 
 Implemented aliases map to existing terminal-only behavior. They do not start
@@ -197,16 +218,18 @@ aegis agents
 aegis agents profiles
 aegis agents contracts
 aegis agents delegate "review the current plan"
+aegis agents delegate "review the current plan" --depth 2
 aegis agents delegate "continue from artifact" --use-artifact <artifact-id> --approved
-aegis agents bg "continue from artifact" --use-artifact <artifact-id> --approved
+aegis agents bg "continue from artifact" --depth 2 --use-artifact <artifact-id> --approved
 aegis agents artifacts
 aegis agents artifacts show <artifact-id>
 aegis agents artifacts search "final synthesis"
 aegis agents synthesis <root-id>
 aegis agents graph <root-id>
 aegis subagents --delegate "review the current plan"
+aegis subagents --delegate "review the current plan" --depth 2
 aegis subagents --delegate "continue from artifact" --use-artifact <artifact-id> --approved
-aegis subagents --background "continue from artifact" --use-artifact <artifact-id> --approved
+aegis subagents --background "continue from artifact" --depth 2 --use-artifact <artifact-id> --approved
 aegis subagents --synthesis <root-id>
 aegis subagents --artifact-graph <root-id>
 ```
@@ -214,6 +237,19 @@ aegis subagents --artifact-graph <root-id>
 Completed delegations create a coordinator `final_synthesis` artifact that can
 be inspected through the same read-only artifact list/show/search commands or
 through the root-scoped synthesis and graph commands.
+
+Agent delegation is explicit and bounded. By default each run is a flat
+coordinator plus planner, researcher, implementer, and reviewer workers. Depth 2
+is opt-in: `--depth 2` or `| depth 2` nests the reviewer under the implementer.
+It is not arbitrary recursive spawning, autonomous fan-out, or a global worker
+pool.
+
+```text
+/agents delegate review the current plan | depth 2
+/agents live review the current plan | depth 2
+/agents bg continue from artifact | depth 2 | use-artifact <artifact-id> | approve
+/subagents improve terminal orchestration | depth 2
+```
 
 `aegis agents contracts` shows each worker role contract and structured budget
 policy. JSON output exposes the budget version, allowed tool groups, denied tool

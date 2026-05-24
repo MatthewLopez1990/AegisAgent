@@ -73,4 +73,4 @@ Run implementation in checkpoints. At each checkpoint, spawn parallel subagents 
 - Python core + Textual TUI + FastAPI backend + React Web GUI is the chosen stack.
 - Hermes/OpenClaw are comparison targets, not code to copy directly.
 - “Same abilities” means parity by capability class, with Aegis-specific security controls taking precedence over exact UX or internal implementation.
-- Subagent fan-out is aggressive but bounded: global concurrency `8`, depth `2`, children per agent `5`.
+- Subagent fan-out is aggressive but bounded per delegation: concurrency cap `8`, default flat depth `1`, opt-in reviewer nesting up to depth `2`, children per agent `5`.
