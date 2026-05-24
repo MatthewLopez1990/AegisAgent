@@ -331,6 +331,10 @@ class TuiRendererTests(unittest.TestCase):
         self.assertTrue(any(command == "/setup hide" for command, _detail in setup_hide_matches))
         model_doctor_matches = slash_palette_candidates("/model d")
         self.assertTrue(any(command == "/model doctor" for command, _detail in model_doctor_matches))
+        model_connect_matches = slash_palette_candidates("/model c", limit=20)
+        self.assertTrue(any(command == "/model connect" for command, _detail in model_connect_matches))
+        self.assertTrue(any(command == "/model connect openai" for command, _detail in model_connect_matches))
+        self.assertTrue(any(command == "/model connect local" for command, _detail in model_connect_matches))
         model_usage_matches = slash_palette_candidates("/model u")
         self.assertTrue(any(command == "/model usage" for command, _detail in model_usage_matches))
         model_auth_matches = slash_palette_candidates("/model auth")
@@ -545,7 +549,17 @@ class TuiRendererTests(unittest.TestCase):
 
             self.assertEqual(result, "models")
             self.assertIn('"status": "unsupported"', auth_login.getvalue())
+            self.assertIn("model connect openai", auth_login.getvalue())
             self.assertIn('"external_action_started": false', auth_login.getvalue())
+
+            model_connect = io.StringIO()
+            with contextlib.redirect_stdout(model_connect):
+                result = dispatch_interactive_command("/model connect openai", paths)
+
+            self.assertEqual(result, "models")
+            self.assertIn("AEGIS MODEL CONNECT", model_connect.getvalue())
+            self.assertIn("OPENAI_API_KEY", model_connect.getvalue())
+            self.assertIn("raw_secret_values_included: false", model_connect.getvalue())
 
             setup_model = io.StringIO()
             with contextlib.redirect_stdout(setup_model):
@@ -553,6 +567,7 @@ class TuiRendererTests(unittest.TestCase):
 
             self.assertEqual(result, "setup")
             self.assertIn("AEGIS SETUP :: model", setup_model.getvalue())
+            self.assertIn("aegis model connect openai", setup_model.getvalue())
             self.assertIn("aegis model configure", setup_model.getvalue())
 
             setup_model_auth = io.StringIO()

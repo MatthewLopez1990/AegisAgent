@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from aegisagent.config import RuntimePaths
+from aegisagent.core.command_names import terminal_command_name
 from aegisagent.core.workspace_tools import WorkspaceToolResult, WorkspaceToolRunner
 
 
@@ -83,7 +84,7 @@ def install_status_payload(paths: RuntimePaths, *, bin_dir: str = "", name: str 
         "shim_path": str(target),
         "installed": target.exists(),
         "points_to_workspace": points_to_workspace,
-        "install_command": f"{clean_name} install shim --approved --name {clean_name}",
+        "install_command": _install_command(clean_name),
         "path_hint": f'export PATH="{target_dir}:$PATH"',
         "run_command": clean_name,
         "update_command": f"{clean_name} update --approved",
@@ -99,6 +100,7 @@ def update_from_github(paths: RuntimePaths, *, remote: str = "origin", branch: s
     clean_remote = remote.strip() or "origin"
     clean_branch = branch.strip() or "main"
     expected_repo_url = os.environ.get("AEGIS_REPO_URL", DEFAULT_REPO_URL).strip() or DEFAULT_REPO_URL
+    update_command = _update_command(clean_remote, clean_branch)
     preview = {
         "title": "AEGIS TERMINAL UPDATE",
         "platform": "macOS/Linux shell",
@@ -106,7 +108,7 @@ def update_from_github(paths: RuntimePaths, *, remote: str = "origin", branch: s
         "remote": clean_remote,
         "branch": clean_branch,
         "repo_url": expected_repo_url,
-        "update_command": f"aegis update --approved --remote {clean_remote} --branch {clean_branch}",
+        "update_command": update_command,
         "git_command": f"git pull --ff-only {clean_remote} {clean_branch}",
         "status": "needs_approval" if not approved else "running",
         "next": "rerun with --approved to pull the latest GitHub branch into this checkout",
@@ -143,7 +145,7 @@ def update_from_github(paths: RuntimePaths, *, remote: str = "origin", branch: s
             "status": result.status,
             "workspace": str(paths.workspace),
             "repo_url": expected_repo_url,
-            "update_command": f"aegis update --approved --remote {clean_remote} --branch {clean_branch}",
+            "update_command": update_command,
             "git_command": f"git pull --ff-only {clean_remote} {clean_branch}",
             "browser_auto_launch": False,
             "gateway_started": False,
@@ -296,6 +298,7 @@ def _blocked_update_result(
     error: str,
     current_repo_url: str = "",
 ) -> WorkspaceToolResult:
+    update_command = _update_command(remote, branch)
     payload = {
         "title": "AEGIS TERMINAL UPDATE",
         "platform": "macOS/Linux shell",
@@ -306,7 +309,7 @@ def _blocked_update_result(
         "repo_url": expected_repo_url,
         "current_repo_url": current_repo_url,
         "error": error,
-        "update_command": f"aegis update --approved --remote {remote} --branch {branch}",
+        "update_command": update_command,
         "git_command": f"git pull --ff-only {remote} {branch}",
         "next": "fix the checkout state, then rerun the approved update",
         "browser_auto_launch": False,
@@ -362,6 +365,19 @@ def _safety_metadata(*, approved: bool, mutation: bool) -> dict[str, Any]:
         "external_action_started": False,
         "browser_auto_launch": False,
     }
+
+
+def _install_command(command_name: str) -> str:
+    if command_name == "aegis":
+        return "aegis install shim --approved"
+    return f"{command_name} install shim --approved --name {command_name}"
+
+
+def _update_command(remote: str, branch: str) -> str:
+    command = terminal_command_name()
+    if remote == "origin" and branch == "main":
+        return f"{command} update --approved"
+    return f"{command} update --approved --remote {remote} --branch {branch}"
 
 
 def _target_bin_dir(raw_bin_dir: str) -> Path:

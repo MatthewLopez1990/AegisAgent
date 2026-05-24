@@ -6,6 +6,7 @@ INSTALL_DIR="${AEGIS_INSTALL_DIR:-$HOME/.aegis-agent}"
 BIN_DIR="${AEGIS_BIN_DIR:-$HOME/.local/bin}"
 COMMAND_NAME="${AEGIS_COMMAND_NAME:-aegis}"
 REPO_URL="${AEGIS_REPO_URL:-https://github.com/MatthewLopez1990/AegisAgent.git}"
+PYTHON="${AEGIS_PYTHON:-python3}"
 
 need_command() {
   if ! command -v "$1" >/dev/null 2>&1; then
@@ -15,7 +16,7 @@ need_command() {
 }
 
 require_python_version() {
-  python3 - <<'PY'
+  "$PYTHON" - <<'PY'
 import sys
 
 minimum = (3, 12)
@@ -59,7 +60,7 @@ if [ ! -d "$INSTALL_DIR/.git" ]; then
 fi
 
 need_command git
-need_command python3
+need_command "$PYTHON"
 require_python_version
 validate_branch
 
@@ -82,7 +83,7 @@ git -C "$INSTALL_DIR" checkout "$BRANCH"
 git -C "$INSTALL_DIR" pull --ff-only origin "$BRANCH"
 
 cd "$INSTALL_DIR"
-PYTHONPATH=src python3 -m aegisagent install shim --approved --bin-dir "$BIN_DIR" --name "$COMMAND_NAME"
+PYTHONPATH=src "$PYTHON" -m aegisagent install shim --approved --bin-dir "$BIN_DIR" --name "$COMMAND_NAME"
 
 echo ""
 echo "AegisAgent updated."

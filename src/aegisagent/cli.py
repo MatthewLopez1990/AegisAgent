@@ -21,7 +21,7 @@ from aegisagent.core.executor import GovernedExecutor
 from aegisagent.core.improvement import ImprovementStore, format_candidate, format_candidate_diff_review, format_improvement, format_improvements, format_verification_run, improvement_summary
 from aegisagent.core.lifecycle import format_install_status, format_update_status, install_status_payload, install_terminal_shim, update_from_github
 from aegisagent.core.memory import MemoryStore, memory_files
-from aegisagent.core.provider_config import ProviderStore, ProviderUsageStore
+from aegisagent.core.provider_config import ProviderStore, ProviderUsageStore, format_provider_connect
 from aegisagent.core.setup_flow import (
     SETUP_SECTION_CHOICES,
     SETUP_SECTIONS,
@@ -64,11 +64,12 @@ from aegisagent.tui.textual_app import run_textual_app
 
 
 def _add_model_arguments(model_parser: argparse.ArgumentParser) -> None:
-    model_parser.add_argument("model_command", nargs="?", default="providers", choices=["providers", "doctor", "configure", "usage", "auth"], help="Provider command to run.")
-    model_parser.add_argument("name", nargs="?", help="Provider name for configure, or auth status/methods/doctor.")
+    model_parser.add_argument("model_command", nargs="?", default="providers", choices=["providers", "doctor", "configure", "connect", "usage", "auth"], help="Provider command to run.")
+    model_parser.add_argument("name", nargs="?", help="Provider name for configure/connect, or auth status/methods/doctor.")
     model_parser.add_argument("--mode", choices=["local", "api_key", "subscription_cli", "not_configured"], default="api_key")
     model_parser.add_argument("--api-key-env", default="", help="Environment variable name that will hold the provider key; the value is never read into config.")
     model_parser.add_argument("--base-url", default="", help="Optional provider base URL metadata; no network call is made.")
+    model_parser.add_argument("--model", default="", help="Model name for `model connect openai`. Defaults to gpt-5.5.")
     model_parser.add_argument("--inactive", action="store_true", help="Save the route without making it active.")
     model_parser.add_argument("--limit", type=int, default=20, help="Limit recent model usage rows.")
 
@@ -681,25 +682,51 @@ def main(argv: list[str] | None = None) -> int:
             elif auth_command == "doctor":
                 print(json.dumps(providers.doctor(), indent=2))
             elif auth_command in {"login", "logout"}:
-                parser.error(f"{args.command} auth {auth_command} is not supported; use status, methods, or doctor")
+                print(
+                    json.dumps(
+                        {
+                            "status": "unsupported",
+                            "reason": "Aegis does not browser-login or logout from model providers; connect by environment handle instead.",
+                            "next": f"{terminal_command_name()} model connect openai",
+                            "browser_auto_launch": False,
+                            "gateway_started": False,
+                            "external_action_started": False,
+                            "model_invocation_performed": False,
+                            "raw_secret_values_included": False,
+                        },
+                        indent=2,
+                    )
+                )
             else:
                 parser.error(f"{args.command} auth requires status, methods, or doctor")
         elif args.model_command == "configure":
             if not args.name:
                 parser.error("model configure requires a provider name")
-            print(
-                json.dumps(
-                    providers.configure(
-                        args.name,
-                        mode=args.mode,
-                        api_key_env=args.api_key_env,
-                        base_url=args.base_url,
-                        active=not args.inactive,
-                        source="cli",
-                    ),
-                    indent=2,
+            try:
+                payload = providers.configure(
+                    args.name,
+                    mode=args.mode,
+                    api_key_env=args.api_key_env,
+                    base_url=args.base_url,
+                    active=not args.inactive,
+                    source="cli",
                 )
-            )
+            except ValueError as exc:
+                parser.error(str(exc))
+            print(json.dumps(payload, indent=2))
+        elif args.model_command == "connect":
+            try:
+                payload = providers.connect(
+                    args.name or "openai",
+                    model=args.model,
+                    api_key_env=args.api_key_env,
+                    base_url=args.base_url,
+                    active=not args.inactive,
+                    source="cli",
+                )
+            except ValueError as exc:
+                parser.error(str(exc))
+            print(json.dumps(payload, indent=2) if args.json else format_provider_connect(payload))
         return 0
 
     if args.command == "connectors":

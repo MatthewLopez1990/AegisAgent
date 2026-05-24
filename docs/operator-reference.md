@@ -158,6 +158,8 @@ Root shortcuts do not create singular subcommand families; use `/tasks watch`,
 
 ```bash
 aegis model providers
+aegis model connect openai
+aegis model connect local
 aegis model configure openai/gpt-5.5 --mode api_key --api-key-env OPENAI_API_KEY
 aegis model doctor
 aegis model usage

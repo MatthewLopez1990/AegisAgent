@@ -35,6 +35,13 @@ Start the agent:
 aegis
 ```
 
+Optional: connect OpenAI with one command after exporting your key:
+
+```bash
+export OPENAI_API_KEY="..."
+aegis model connect openai
+```
+
 Update this installed checkout from GitHub later:
 
 ```bash
@@ -94,6 +101,46 @@ AEGIS_COMMAND_NAME="aegis"
 AEGIS_BRANCH="main"
 AEGIS_REPO_URL="https://github.com/MatthewLopez1990/AegisAgent.git"
 ```
+
+## Connect A Model Route
+
+Aegis works immediately with the built-in local terminal provider. No account,
+browser login, or API key is required:
+
+```bash
+aegis model connect local
+aegis model doctor
+```
+
+To use OpenAI, keep the key in your shell and let Aegis store only the
+environment-variable name:
+
+```bash
+export OPENAI_API_KEY="..."
+aegis model connect openai
+aegis model doctor
+aegis chat "summarize this workspace"
+```
+
+`aegis model connect openai` defaults to `openai/gpt-5.5` and the
+`OPENAI_API_KEY` environment handle. Use `--model` or `--api-key-env` only when
+you need a non-default route:
+
+```bash
+aegis model connect openai --model gpt-5.5 --api-key-env OPENAI_API_KEY
+```
+
+Advanced compatibility commands still work:
+
+```bash
+aegis model providers
+aegis model configure openai/gpt-5.5 --mode api_key --api-key-env OPENAI_API_KEY
+aegis model configure openai/gpt-5.5 --mode subscription_cli
+```
+
+The subscription CLI bridge is metadata-only for now. Auth login/logout do not
+launch a browser; use `aegis model connect openai` for the supported external
+provider path.
 
 ## Start The Agent
 
@@ -156,8 +203,7 @@ to show the wizard again.
 
 ## Update From GitHub
 
-Use this terminal command to update the installed agent from GitHub down to the
-computer running it:
+From the installed `aegis` command, run:
 
 ```bash
 aegis update --approved
@@ -180,18 +226,7 @@ aegis health
 aegis audit verify
 ```
 
-## Models And Agents
-
-The default provider is local and terminal-only. To use an OpenAI-compatible
-route, store the secret in your shell environment and give Aegis the environment
-variable name:
-
-```bash
-export OPENAI_API_KEY="..."
-aegis model configure openai/gpt-5.5 --mode api_key --api-key-env OPENAI_API_KEY
-aegis model doctor
-aegis model usage
-```
+## Use Model-Backed Agents
 
 Run model-backed role workers:
 
@@ -225,6 +260,7 @@ aegis                         # start the terminal UI
 aegis activation              # print terminal readiness card
 aegis commands                # show slash-command lanes
 aegis setup next              # show the next setup action
+aegis model connect openai    # connect OpenAI by environment handle
 aegis setup --run-checks      # run metadata-only readiness checks
 aegis model doctor            # check configured model route
 aegis tasks --submit "do work"

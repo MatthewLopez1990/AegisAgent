@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from datetime import datetime, timezone
 from dataclasses import dataclass
 from typing import Any
+from urllib.parse import urlparse
 from uuid import uuid4
 
 from aegisagent.config import DEFAULT_CONFIG, RuntimePaths, ensure_runtime
@@ -13,6 +15,7 @@ from aegisagent.security.audit import AuditLog
 
 
 LOCAL_PROVIDER = "local/terminal-v0"
+_ENV_HANDLE_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
 @dataclass(frozen=True, slots=True)
@@ -61,14 +64,17 @@ class ProviderStore:
             raise ValueError("provider name is required")
         if mode not in {"local", "api_key", "subscription_cli", "not_configured"}:
             raise ValueError(f"unsupported provider mode: {mode}")
+        clean_api_key_env = api_key_env.strip()
+        clean_base_url = base_url.strip()
+        _validate_provider_inputs(mode=mode, api_key_env=clean_api_key_env, base_url=clean_base_url)
         config = self._load_config()
         providers = config.setdefault("providers", {})
         routes = providers.setdefault("routes", {})
         routes[name] = {
             "name": name,
             "mode": mode,
-            "api_key_env": api_key_env,
-            "base_url": base_url,
+            "api_key_env": clean_api_key_env,
+            "base_url": clean_base_url,
             "browser_required": False,
         }
         if active:
@@ -80,8 +86,8 @@ class ProviderStore:
             {
                 "name": name,
                 "mode": mode,
-                "api_key_env": api_key_env,
-                "base_url_configured": bool(base_url),
+                "api_key_env": clean_api_key_env,
+                "base_url_configured": bool(clean_base_url),
                 "active": active,
                 "source": source,
                 "external_action_started": False,
@@ -90,6 +96,61 @@ class ProviderStore:
             },
         )
         return {"route": self.route(name).to_dict(), "active_provider": self.active_provider(), "receipt": receipt["id"]}
+
+    def connect(
+        self,
+        provider: str = "openai",
+        *,
+        model: str = "",
+        api_key_env: str = "",
+        base_url: str = "",
+        active: bool = True,
+        source: str = "cli",
+    ) -> dict[str, Any]:
+        target = (provider or "openai").strip().lower()
+        command = terminal_command_name()
+        if target in {"local", LOCAL_PROVIDER}:
+            configured = self.configure(LOCAL_PROVIDER, mode="local", active=active, source=source)
+            return {
+                **configured,
+                "title": "AEGIS MODEL CONNECT",
+                "status": "ready",
+                "provider": LOCAL_PROVIDER,
+                "mode": "local",
+                "env_handle": "",
+                "env_present": False,
+                "raw_secret_values_included": False,
+                "browser_auto_launch": False,
+                "external_action_started": False,
+                "model_invocation_performed": False,
+                "local_fallback_provider": LOCAL_PROVIDER,
+                "next": [f"Run `{command}` or `{command} chat \"summarize this workspace\"`."],
+            }
+
+        route_name = _provider_route_name(target, model=model)
+        env_handle = api_key_env.strip() or _default_api_key_env(route_name)
+        configured = self.configure(route_name, mode="api_key", api_key_env=env_handle, base_url=base_url, active=active, source=source)
+        env_present = bool(os.environ.get(env_handle))
+        status = "ready" if env_present else "needs_env"
+        return {
+            **configured,
+            "title": "AEGIS MODEL CONNECT",
+            "status": status,
+            "provider": route_name,
+            "mode": "api_key",
+            "env_handle": env_handle,
+            "env_present": env_present,
+            "raw_secret_values_included": False,
+            "browser_auto_launch": False,
+            "external_action_started": False,
+            "model_invocation_performed": False,
+            "local_fallback_provider": LOCAL_PROVIDER,
+            "next": [
+                f"Export your key with `export {env_handle}=...`." if not env_present else f"`{env_handle}` is present; no raw key was stored.",
+                f"Run `{command} model doctor`.",
+                f"Run `{command} chat \"summarize this workspace\"`.",
+            ],
+        }
 
     def active_provider(self) -> str:
         config = self._load_config()
@@ -115,7 +176,7 @@ class ProviderStore:
             "browser_required": False,
             "external_action_started": False,
             "model_invocation_performed": False,
-            "next": f"Use `{command} model configure <name> --mode api_key --api-key-env OPENAI_API_KEY` or keep `local/terminal-v0` active.",
+            "next": f"Use `{command} model connect openai` or keep `local/terminal-v0` active.",
         }
 
     def auth_status(self) -> dict[str, Any]:
@@ -129,7 +190,7 @@ class ProviderStore:
                 "browser_required": False,
                 "external_action_started": False,
                 "model_invocation_performed": False,
-                "command": f"{command} model configure local/terminal-v0 --mode local",
+                "command": f"{command} model connect local",
             },
             {
                 "name": "api_key_env",
@@ -140,7 +201,7 @@ class ProviderStore:
                 "browser_required": False,
                 "external_action_started": False,
                 "model_invocation_performed": False,
-                "command": f"{command} model configure openai/gpt-5.5 --mode api_key --api-key-env OPENAI_API_KEY",
+                "command": f"{command} model connect openai",
             },
             {
                 "name": "subscription_cli",
@@ -257,6 +318,62 @@ def _route_status(mode: str, api_key_env: str) -> str:
     if mode == "subscription_cli":
         return "configured_metadata_only"
     return "not_configured"
+
+
+def _validate_provider_inputs(*, mode: str, api_key_env: str, base_url: str) -> None:
+    if api_key_env:
+        lowered = api_key_env.lower()
+        if "\n" in api_key_env or "\r" in api_key_env or api_key_env.startswith(("sk-", "Bearer ", "bearer ")):
+            raise ValueError("api-key-env must be an environment variable name, not a secret value")
+        if lowered.startswith(("sk-", "xoxb-", "ghp_", "github_pat_")):
+            raise ValueError("api-key-env must be an environment variable name, not a secret value")
+        if not _ENV_HANDLE_RE.fullmatch(api_key_env):
+            raise ValueError("api-key-env must be an environment variable name such as OPENAI_API_KEY")
+    if base_url:
+        parsed = urlparse(base_url)
+        if parsed.username or parsed.password:
+            raise ValueError("base-url must not include credentials")
+
+
+def _provider_route_name(provider: str, *, model: str = "") -> str:
+    if "/" in provider:
+        return provider
+    selected_model = model.strip()
+    if provider == "openai":
+        return f"openai/{selected_model or 'gpt-5.5'}"
+    return f"{provider}/{selected_model or 'default'}"
+
+
+def _default_api_key_env(route_name: str) -> str:
+    provider = route_name.split("/", 1)[0].upper().replace("-", "_")
+    if provider == "OPENAI":
+        return "OPENAI_API_KEY"
+    return f"{provider}_API_KEY"
+
+
+def format_provider_connect(payload: dict[str, Any]) -> str:
+    lines = [
+        str(payload.get("title") or "AEGIS MODEL CONNECT"),
+        f"status    {payload.get('status', '')}",
+        f"provider  {payload.get('provider', payload.get('active_provider', ''))}",
+        f"mode      {payload.get('mode', '')}",
+    ]
+    env_handle = str(payload.get("env_handle") or "")
+    if env_handle:
+        lines.append(f"env       {env_handle} ({'present' if payload.get('env_present') else 'missing'})")
+    lines.extend(
+        [
+            "raw_secret_values_included: false",
+            "browser_auto_launch: false",
+            "external_action_started: false",
+            "",
+            "next",
+        ]
+    )
+    lines.extend(f"- {item}" for item in payload.get("next", []))
+    if payload.get("receipt"):
+        lines.extend(["", f"audit receipt: {payload['receipt']}"])
+    return "\n".join(lines)
 
 
 class ProviderUsageStore:

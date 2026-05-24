@@ -173,12 +173,15 @@ class SetupGuide:
         command = terminal_command_name()
         provider = ProviderStore(self.paths).summary()
         provider_mode = str(provider.get("mode") or "unknown")
-        if provider_mode in {"unknown", "not_configured", "local"}:
+        active_provider = str(provider.get("active_provider") or "")
+        active_route = next((route for route in provider.get("routes", []) if route.get("name") == active_provider), {})
+        provider_status = str(active_route.get("status") or "")
+        if provider_mode in {"unknown", "not_configured", "local"} or provider_status == "env_missing":
             return SetupPriority(
                 section="model",
-                status=provider_mode,
+                status=provider_status or provider_mode,
                 label="Choose model route",
-                reason="Pick the local terminal route or save an external provider handle before running real agent turns.",
+                reason="Connect OpenAI with one command or keep the local terminal provider.",
                 command=f"{command} setup model",
                 slash_command="/setup model",
                 index=1,
@@ -226,11 +229,13 @@ class SetupGuide:
             return SetupSection(
                 "model",
                 str(provider.get("mode") or "unknown"),
-                f"Active provider: {provider.get('active_provider', '')}. Configure external routes by environment-variable handle, not raw secret.",
+                f"Active provider: {provider.get('active_provider', '')}. Use one connect command; Aegis stores only an environment-variable handle, never the raw key.",
                 (
                     f"{command} model providers",
-                    f"{command} model configure openai/gpt-5.5 --mode api_key --api-key-env OPENAI_API_KEY",
+                    f"{command} model connect openai",
+                    f"{command} model connect local",
                     f"{command} model doctor",
+                    f"{command} model configure openai/gpt-5.5 --mode api_key --api-key-env OPENAI_API_KEY",
                 ),
                 tuple({"name": route["name"], "status": route["status"]} for route in provider.get("routes", [])),
             )
@@ -240,7 +245,7 @@ class SetupGuide:
                 "secrets",
                 "handles_only",
                 "Secrets are referenced by handles such as environment variable names; raw secret values are not stored in setup config or audit payloads.",
-                ("export OPENAI_API_KEY=...", f"{command} model configure openai/gpt-5.5 --mode api_key --api-key-env OPENAI_API_KEY"),
+                ("export OPENAI_API_KEY=...", f"{command} model connect openai"),
                 ({"name": "raw_secret_values_included", "ok": False},),
             )
         if name == "sandbox":

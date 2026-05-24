@@ -6,6 +6,7 @@ BRANCH="${AEGIS_BRANCH:-main}"
 INSTALL_DIR="${AEGIS_INSTALL_DIR:-$HOME/.aegis-agent}"
 BIN_DIR="${AEGIS_BIN_DIR:-$HOME/.local/bin}"
 COMMAND_NAME="${AEGIS_COMMAND_NAME:-aegis}"
+PYTHON="${AEGIS_PYTHON:-python3}"
 
 need_command() {
   if ! command -v "$1" >/dev/null 2>&1; then
@@ -15,7 +16,7 @@ need_command() {
 }
 
 require_python_version() {
-  python3 - <<'PY'
+  "$PYTHON" - <<'PY'
 import sys
 
 minimum = (3, 12)
@@ -71,7 +72,7 @@ require_clean_checkout() {
 }
 
 need_command git
-need_command python3
+need_command "$PYTHON"
 require_python_version
 validate_branch
 
@@ -89,11 +90,17 @@ else
 fi
 
 cd "$INSTALL_DIR"
-PYTHONPATH=src python3 -m aegisagent install shim --approved --bin-dir "$BIN_DIR" --name "$COMMAND_NAME"
+PYTHONPATH=src "$PYTHON" -m aegisagent install shim --approved --bin-dir "$BIN_DIR" --name "$COMMAND_NAME"
 
 echo ""
 echo "AegisAgent installed."
-echo "Run: $COMMAND_NAME"
-echo "Update: $COMMAND_NAME update --approved"
-echo "If needed, add this to your shell profile:"
+echo ""
+echo "Next commands:"
 echo "  export PATH=\"$BIN_DIR:\$PATH\""
+echo "  command -v $COMMAND_NAME"
+echo "  $COMMAND_NAME activation"
+echo "  $COMMAND_NAME model connect local"
+echo "  $COMMAND_NAME"
+echo ""
+echo "Update later:"
+echo "  $COMMAND_NAME update --approved"

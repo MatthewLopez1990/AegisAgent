@@ -24,7 +24,7 @@ from aegisagent.core.executor import GovernedExecutor
 from aegisagent.core.improvement import ImprovementStore, format_candidate, format_candidate_diff_review, format_improvement, format_improvements, format_verification_run, improvement_summary
 from aegisagent.core.lifecycle import format_install_status, format_update_status, install_status_payload, install_terminal_shim, update_from_github
 from aegisagent.core.memory import MemoryStore
-from aegisagent.core.provider_config import ProviderStore, ProviderUsageStore
+from aegisagent.core.provider_config import ProviderStore, ProviderUsageStore, format_provider_connect
 from aegisagent.core.sessions import SessionStore
 from aegisagent.core.setup_flow import (
     SETUP_SECTIONS,
@@ -173,6 +173,9 @@ SLASH_COMMANDS: tuple[tuple[str, str], ...] = (
     ("/q", "quick alias for /tasks submit"),
     ("/add-dir", "record an extra workspace context directory"),
     ("/model providers", "show configured local model provider routes"),
+    ("/model connect", "connect OpenAI with the default environment handle"),
+    ("/model connect openai", "connect OpenAI using OPENAI_API_KEY"),
+    ("/model connect local", "use the built-in local provider"),
     ("/model doctor", "run metadata-only model route checks"),
     ("/model usage", "show terminal model invocation usage ledger"),
     ("/model auth status", "show read-only model auth status"),
@@ -336,6 +339,8 @@ COMMAND_MENU_GROUPS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
             ("/setup hide", "hide first-launch wizard"),
             ("/setup reset", "restore first-launch wizard"),
             ("/model providers", "show provider route readiness"),
+            ("/model connect openai", "connect OpenAI with OPENAI_API_KEY"),
+            ("/model connect local", "use the built-in local provider"),
             ("/model doctor", "run provider route readiness checks"),
             ("/model usage", "show local/external model usage ledger"),
             ("/model auth status", "show read-only model auth status"),
@@ -496,7 +501,7 @@ def build_interactive_panels(paths: RuntimePaths, *, active_menu: str | None = N
     if active_menu == "setup":
         focus = (
             InteractiveItem("Next step", "Show the next concrete setup action.", "/setup next", "next"),
-            InteractiveItem("Model provider", "Choose API key, subscription bridge, or local route.", "/setup model", "ready"),
+            InteractiveItem("Model provider", "Use model connect openai, local fallback, or subscription metadata.", "/setup model", "ready"),
             InteractiveItem("Secrets handles", "Store env names, never raw token values.", "/setup secrets", "safe"),
             InteractiveItem("Sandbox", "Prefer Docker; keep host execution gated.", "/setup sandbox", "review"),
             InteractiveItem("Connectors", "Slack, Teams, webhook, MCP, browser, Open WebUI metadata.", "/setup connectors", "gated"),
@@ -966,7 +971,7 @@ class _CursesAegisAgent:
             self.message = "No slash command matches."
             return
         command = palette[min(self.palette_index, len(palette) - 1)][0]
-        self.input_buffer = command + (" " if command in {"/policy shell", "/read", "/git diff", "/git stage", "/git commit", "/git branch", "/git remote", "/edit replace", "/test", "/verify", "/sessions search", "/submit", "/add-dir", "/memory add", "/memory search", "/memory show", "/memory delete", "/connectors draft", "/connectors send", "/web fetch", "/browser open", "/browser screenshot", "/tasks submit", "/tasks bg", "/tasks run", "/tasks start", "/tasks events", "/tasks output", "/tasks logs", "/tasks watch", "/tasks cancel", "/automations create", "/automations trigger", "/automations pause", "/automations resume", "/automations delete", "/improve propose", "/improve approve", "/improve implement", "/improve handoff", "/improve candidate", "/improve diff", "/improve verify", "/improve apply", "/improve evidence", "/improve complete", "/improve reject", "/subagents bg", "/subagents live", "/subagents monitor", "/subagents cancel", "/subagents artifacts show", "/subagents artifacts search", "/agents delegate", "/agents bg", "/agents live", "/agents monitor", "/agents cancel", "/agents artifacts show", "/agents artifacts search", "/q"} else "")
+        self.input_buffer = command + (" " if command in {"/policy shell", "/read", "/git diff", "/git stage", "/git commit", "/git branch", "/git remote", "/edit replace", "/test", "/verify", "/sessions search", "/submit", "/add-dir", "/memory add", "/memory search", "/memory show", "/memory delete", "/connectors draft", "/connectors send", "/web fetch", "/browser open", "/browser screenshot", "/tasks submit", "/tasks bg", "/tasks run", "/tasks start", "/tasks events", "/tasks output", "/tasks logs", "/tasks watch", "/tasks cancel", "/automations create", "/automations trigger", "/automations pause", "/automations resume", "/automations delete", "/improve propose", "/improve approve", "/improve implement", "/improve handoff", "/improve candidate", "/improve diff", "/improve verify", "/improve apply", "/improve evidence", "/improve complete", "/improve reject", "/model connect", "/subagents bg", "/subagents live", "/subagents monitor", "/subagents cancel", "/subagents artifacts show", "/subagents artifacts search", "/agents delegate", "/agents bg", "/agents live", "/agents monitor", "/agents cancel", "/agents artifacts show", "/agents artifacts search", "/q"} else "")
         self.cursor = len(self.input_buffer)
         self.message = f"Completed {command}; add args or press Enter."
 
@@ -1202,6 +1207,17 @@ def dispatch_interactive_command(command: str, paths: RuntimePaths) -> str:
         SessionStore(paths).append("main", "tool", f"Context directory added: {rel}", metadata={"source": "tui", "tool": "session.add_dir", "path": rel, "receipt_id": receipt["id"]})
         print_json({"path": rel, "status": "ok", "receipt": receipt["id"]})
         return "add-dir"
+    if command.startswith("/model connect") or command.startswith("/models connect"):
+        raw = command.removeprefix("/model connect").removeprefix("/models connect").strip()
+        parts = raw.split()
+        provider = parts[0] if parts else "openai"
+        try:
+            payload = ProviderStore(paths).connect(provider, source="tui")
+        except ValueError as exc:
+            print_json({"status": "blocked", "error": str(exc), "browser_auto_launch": False, "external_action_started": False, "raw_secret_values_included": False})
+        else:
+            print(format_provider_connect(payload))
+        return "models"
     if command in {"/model auth status", "/model auth methods", "/models auth status", "/models auth methods"} or command.startswith("/model auth status") or command.startswith("/model auth methods") or command.startswith("/models auth status") or command.startswith("/models auth methods"):
         print_json(ProviderStore(paths).auth_status())
         return "models"
@@ -1212,7 +1228,8 @@ def dispatch_interactive_command(command: str, paths: RuntimePaths) -> str:
         print_json(
             {
                 "status": "unsupported",
-                "reason": "model auth login/logout are not implemented in AegisAgent terminal mode; use /model auth status, /model auth methods, or /model auth doctor.",
+                "reason": "Aegis does not browser-login or logout from model providers; connect by environment handle instead.",
+                "next": "aegis model connect openai",
                 "browser_auto_launch": False,
                 "gateway_started": False,
                 "external_action_started": False,
@@ -2119,7 +2136,7 @@ def _initial_output_lines(paths: RuntimePaths, *, setup_open: bool = False) -> l
                 "The composer is still live: type a normal request or use one of these setup commands.",
                 "",
                 "Setup path:",
-                "1. /setup model        choose local, API-key, or subscription bridge metadata",
+                "1. /setup model        connect OpenAI, use local fallback, or inspect subscription metadata",
                 "2. /setup connectors   inspect Slack, Teams, webhook, MCP, browser, Open WebUI readiness",
                 "3. /setup run-checks   run local metadata-only safety checks",
                 "4. /setup first-task   try one safe starter task",

@@ -83,20 +83,23 @@ class CliTests(unittest.TestCase):
         self.assertIn("canonical_repo_url", install_text)
         self.assertIn("invalid AEGIS_BRANCH", install_text)
         self.assertIn("require_python_version", install_text)
+        self.assertIn("AEGIS_PYTHON", install_text)
         self.assertIn("minimum = (3, 12)", install_text)
         self.assertIn("python3 3.12 or newer is required", install_text)
         self.assertLess(install_text.index("require_python_version"), install_text.index("git clone --branch"))
-        self.assertIn("python3 -m aegisagent install shim --approved", install_text)
+        self.assertIn('"$PYTHON" -m aegisagent install shim --approved', install_text)
+        self.assertIn("$COMMAND_NAME model connect local", install_text)
         self.assertIn("git -C \"$INSTALL_DIR\" pull --ff-only origin \"$BRANCH\"", update_text)
         self.assertIn("remote get-url origin", update_text)
         self.assertIn("status --porcelain", update_text)
         self.assertIn("canonical_repo_url", update_text)
         self.assertIn("invalid AEGIS_BRANCH", update_text)
         self.assertIn("require_python_version", update_text)
+        self.assertIn("AEGIS_PYTHON", update_text)
         self.assertIn("minimum = (3, 12)", update_text)
         self.assertIn("python3 3.12 or newer is required", update_text)
         self.assertLess(update_text.index("require_python_version"), update_text.index('git -C "$INSTALL_DIR" fetch origin "$BRANCH"'))
-        self.assertIn("python3 -m aegisagent install shim --approved", update_text)
+        self.assertIn('"$PYTHON" -m aegisagent install shim --approved', update_text)
         self.assertNotIn("open ", install_text)
         self.assertNotIn("open -a", install_text)
         self.assertNotIn("xdg-open", install_text)
@@ -117,10 +120,12 @@ class CliTests(unittest.TestCase):
         readme = Path("README.md").read_text(encoding="utf-8")
 
         install_index = readme.index("## Install On macOS Or Linux")
+        connect_index = readme.index("## Connect A Model Route")
         start_index = readme.index("## Start The Agent")
         update_index = readme.index("## Update From GitHub")
         develop_index = readme.index("## Develop From Source")
-        self.assertLess(install_index, start_index)
+        self.assertLess(install_index, connect_index)
+        self.assertLess(connect_index, start_index)
         self.assertLess(start_index, update_index)
         self.assertLess(update_index, develop_index)
 
@@ -129,6 +134,15 @@ class CliTests(unittest.TestCase):
         self.assertIn("git --version", readme)
         self.assertIn("command -v aegis", readme)
         self.assertIn("aegis activation", readme)
+        connect_section = readme[connect_index:start_index]
+        self.assertIn("aegis model connect openai", connect_section)
+        self.assertIn("aegis model connect local", connect_section)
+        self.assertIn('export OPENAI_API_KEY="..."', connect_section)
+        self.assertIn("aegis model configure openai/gpt-5.5 --mode api_key --api-key-env OPENAI_API_KEY", connect_section)
+        self.assertIn("aegis model configure openai/gpt-5.5 --mode subscription_cli", connect_section)
+        self.assertIn("metadata-only", connect_section)
+        self.assertNotIn("model auth login", connect_section)
+        self.assertNotIn("model auth logout", connect_section)
         self.assertIn("aegis tui", readme[start_index:update_index])
         self.assertIn("aegis setup next", readme[start_index:update_index])
         self.assertIn("aegis setup model", readme[start_index:update_index])
@@ -214,6 +228,7 @@ class CliTests(unittest.TestCase):
             install = subprocess.run(["sh", "scripts/install.sh"], text=True, capture_output=True, check=False, env=env)
             self.assertEqual(install.returncode, 0, install.stderr)
             self.assertIn("AegisAgent installed.", install.stdout)
+            self.assertIn("aegis model connect local", install.stdout)
             command_lookup = subprocess.run(["sh", "-c", "command -v aegis"], text=True, capture_output=True, check=False, env=env)
             self.assertEqual(command_lookup.returncode, 0, command_lookup.stderr)
             self.assertEqual(Path(command_lookup.stdout.strip()).resolve(), (bin_dir / "aegis").resolve())
@@ -223,6 +238,9 @@ class CliTests(unittest.TestCase):
                 ("activation", ["aegis", "activation"]),
                 ("setup next", ["aegis", "setup", "next"]),
                 ("setup model", ["aegis", "setup", "model"]),
+                ("model connect local", ["aegis", "model", "connect", "local"]),
+                ("model connect openai", ["aegis", "model", "connect", "openai"]),
+                ("model auth login", ["aegis", "model", "auth", "login"]),
                 ("setup checks", ["aegis", "setup", "--run-checks"]),
                 ("health", ["aegis", "health"]),
                 ("audit", ["aegis", "audit", "verify"]),
@@ -241,6 +259,11 @@ class CliTests(unittest.TestCase):
             self.assertIn("browser_auto_launch: false", outputs["activation"])
             self.assertIn("browser_auto_launch: false", outputs["setup next"])
             self.assertIn("browser_auto_launch: false", outputs["setup model"])
+            self.assertIn("AEGIS MODEL CONNECT", outputs["model connect local"])
+            self.assertIn("local/terminal-v0", outputs["model connect local"])
+            self.assertIn("OPENAI_API_KEY", outputs["model connect openai"])
+            self.assertIn('"status": "unsupported"', outputs["model auth login"])
+            self.assertIn("model connect openai", outputs["model auth login"])
             self.assertIn('"browser_auto_launch": false', outputs["setup checks"])
             self.assertIn('"ok": true', outputs["health"])
             self.assertIn('"ok": true', outputs["audit"])
@@ -711,7 +734,7 @@ class CliTests(unittest.TestCase):
             self.assertEqual(status_payload["title"], "AEGIS TERMINAL INSTALL")
             self.assertFalse(status_payload["installed"])
             self.assertFalse(status_payload["browser_auto_launch"])
-            self.assertEqual(status_payload["install_command"], "aegis install shim --approved --name aegis")
+            self.assertEqual(status_payload["install_command"], "aegis install shim --approved")
             self.assertEqual(status_payload["completion_command"], "aegis completion zsh >> ~/.zshrc")
 
             preview = run_cli("--json", "install", "shim", "--bin-dir", str(bin_dir), "--name", "aegis-test", cwd=tmp)
@@ -1555,6 +1578,26 @@ class CliTests(unittest.TestCase):
             self.assertEqual(route["name"], "openai/gpt-5.5")
             self.assertEqual(route["status"], "env_missing")
 
+            connected = run_cli("--json", "model", "connect", "openai", cwd=tmp, extra_env={"OPENAI_API_KEY": "test-key"})
+            self.assertEqual(connected.returncode, 0, connected.stderr)
+            connected_payload = json.loads(connected.stdout)
+            self.assertEqual(connected_payload["provider"], "openai/gpt-5.5")
+            self.assertEqual(connected_payload["status"], "ready")
+            self.assertEqual(connected_payload["env_handle"], "OPENAI_API_KEY")
+            self.assertTrue(connected_payload["env_present"])
+            self.assertEqual(connected_payload["local_fallback_provider"], "local/terminal-v0")
+            self.assertFalse(connected_payload["browser_auto_launch"])
+            self.assertFalse(connected_payload["raw_secret_values_included"])
+
+            blocked_secret = run_cli("model", "connect", "openai", "--api-key-env", "sk-test-secret", cwd=tmp)
+            self.assertEqual(blocked_secret.returncode, 2)
+            self.assertIn("api-key-env must be an environment variable name", blocked_secret.stderr)
+            self.assertNotIn("sk-test-secret", blocked_secret.stderr)
+
+            blocked_url = run_cli("model", "connect", "openai", "--base-url", "https://user:pass@example.com/v1", cwd=tmp)
+            self.assertEqual(blocked_url.returncode, 2)
+            self.assertIn("base-url must not include credentials", blocked_url.stderr)
+
             doctor = run_cli("model", "doctor", cwd=tmp)
             self.assertEqual(doctor.returncode, 0, doctor.stderr)
             checks = json.loads(doctor.stdout)["checks"]
@@ -1597,8 +1640,11 @@ class CliTests(unittest.TestCase):
 
             login = run_cli("model", "auth", "login", cwd=tmp)
             logout = run_cli("models", "auth", "logout", cwd=tmp)
-            self.assertEqual(login.returncode, 2)
-            self.assertEqual(logout.returncode, 2)
+            self.assertEqual(login.returncode, 0, login.stderr)
+            self.assertEqual(logout.returncode, 0, logout.stderr)
+            self.assertEqual(json.loads(login.stdout)["status"], "unsupported")
+            self.assertIn("model connect openai", json.loads(login.stdout)["next"])
+            self.assertFalse(json.loads(logout.stdout)["browser_auto_launch"])
 
     def test_connectors_are_metadata_only_and_gated(self):
         with tempfile.TemporaryDirectory() as tmp:
