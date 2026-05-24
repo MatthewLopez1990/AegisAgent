@@ -1,11 +1,19 @@
 import contextlib
+import fcntl
 import io
 import json
+import os
+import pty
+import select
+import shlex
+import shutil
+import struct
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import termios
 import threading
 import time
 import tomllib
@@ -26,6 +34,27 @@ def run_cli(*args: str, cwd: str, extra_env: dict[str, str] | None = None) -> su
         check=False,
         env=env,
     )
+
+
+def read_pty_until(fd: int, markers: tuple[str, ...], *, initial: str = "", timeout: float = 5.0) -> str:
+    transcript = initial
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if all(marker in transcript for marker in markers):
+            return transcript
+        ready, _, _ = select.select([fd], [], [], max(0.0, min(0.2, deadline - time.monotonic())))
+        if not ready:
+            continue
+        try:
+            chunk = os.read(fd, 4096)
+        except OSError:
+            time.sleep(0.05)
+            continue
+        if not chunk:
+            break
+        transcript += chunk.decode("utf-8", errors="ignore")
+    missing = [marker for marker in markers if marker not in transcript]
+    raise AssertionError(f"timed out waiting for PTY markers {missing}; transcript:\n{transcript}")
 
 
 class CliTests(unittest.TestCase):
@@ -53,12 +82,20 @@ class CliTests(unittest.TestCase):
         self.assertIn("status --porcelain", install_text)
         self.assertIn("canonical_repo_url", install_text)
         self.assertIn("invalid AEGIS_BRANCH", install_text)
+        self.assertIn("require_python_version", install_text)
+        self.assertIn("minimum = (3, 12)", install_text)
+        self.assertIn("python3 3.12 or newer is required", install_text)
+        self.assertLess(install_text.index("require_python_version"), install_text.index("git clone --branch"))
         self.assertIn("python3 -m aegisagent install shim --approved", install_text)
         self.assertIn("git -C \"$INSTALL_DIR\" pull --ff-only origin \"$BRANCH\"", update_text)
         self.assertIn("remote get-url origin", update_text)
         self.assertIn("status --porcelain", update_text)
         self.assertIn("canonical_repo_url", update_text)
         self.assertIn("invalid AEGIS_BRANCH", update_text)
+        self.assertIn("require_python_version", update_text)
+        self.assertIn("minimum = (3, 12)", update_text)
+        self.assertIn("python3 3.12 or newer is required", update_text)
+        self.assertLess(update_text.index("require_python_version"), update_text.index('git -C "$INSTALL_DIR" fetch origin "$BRANCH"'))
         self.assertIn("python3 -m aegisagent install shim --approved", update_text)
         self.assertNotIn("open ", install_text)
         self.assertNotIn("xdg-open", install_text)
@@ -97,6 +134,119 @@ class CliTests(unittest.TestCase):
         self.assertIn("| approve", readme[start_index:update_index])
         self.assertIn("does not launch a browser", readme)
         self.assertIn("[docs/operator-reference.md](docs/operator-reference.md)", readme)
+
+    def test_readme_installed_user_commands_smoke_without_browser_launch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "source"
+            remote = root / "remote.git"
+            home = root / "home"
+            install_dir = home / ".aegis-agent"
+            bin_dir = home / ".local" / "bin"
+            fake_bin = root / "fake-bin"
+            sentinel = root / "browser-launch-sentinel.log"
+            source.mkdir()
+            fake_bin.mkdir(parents=True)
+            bin_dir.mkdir(parents=True)
+            for name in ("open", "xdg-open"):
+                fake = fake_bin / name
+                fake.write_text(f"#!/usr/bin/env sh\necho \"$0 $@\" >> {shlex.quote(str(sentinel))}\nexit 66\n", encoding="utf-8")
+                fake.chmod(0o755)
+            python_wrapper = fake_bin / "python3"
+            python_wrapper.write_text(f"#!/usr/bin/env sh\nexec {shlex.quote(sys.executable)} \"$@\"\n", encoding="utf-8")
+            python_wrapper.chmod(0o755)
+
+            shutil.copytree(
+                Path.cwd(),
+                source,
+                dirs_exist_ok=True,
+                ignore=shutil.ignore_patterns(
+                    ".git",
+                    ".aegisagent",
+                    ".pytest_cache",
+                    "__pycache__",
+                    "*.pyc",
+                    ".venv",
+                    "dist",
+                    "build",
+                    "*.egg-info",
+                    "node_modules",
+                    "web/node_modules",
+                    "web/dist",
+                ),
+            )
+            subprocess.run(["git", "init"], cwd=source, text=True, capture_output=True, check=True)
+            subprocess.run(["git", "checkout", "-B", "main"], cwd=source, text=True, capture_output=True, check=True)
+            subprocess.run(["git", "config", "user.name", "Aegis Test"], cwd=source, text=True, capture_output=True, check=True)
+            subprocess.run(["git", "config", "user.email", "aegis@example.invalid"], cwd=source, text=True, capture_output=True, check=True)
+            subprocess.run(["git", "add", "."], cwd=source, text=True, capture_output=True, check=True)
+            subprocess.run(["git", "commit", "-m", "Install source"], cwd=source, text=True, capture_output=True, check=True)
+            subprocess.run(["git", "init", "--bare", str(remote)], text=True, capture_output=True, check=True)
+            remote_url = remote.resolve().as_uri()
+            subprocess.run(["git", "remote", "add", "origin", remote_url], cwd=source, text=True, capture_output=True, check=True)
+            subprocess.run(["git", "push", "origin", "main"], cwd=source, text=True, capture_output=True, check=True)
+
+            env = {
+                **os.environ,
+                "HOME": str(home),
+                "PATH": f"{fake_bin}:{bin_dir}:{os.environ.get('PATH', '')}",
+                "AEGIS_INSTALL_DIR": str(install_dir),
+                "AEGIS_BIN_DIR": str(bin_dir),
+                "AEGIS_COMMAND_NAME": "aegis",
+                "AEGIS_REPO_URL": remote_url,
+                "AEGIS_BRANCH": "main",
+                "AEGIS_PYTHON": sys.executable,
+            }
+            install = subprocess.run(["sh", "scripts/install.sh"], text=True, capture_output=True, check=False, env=env)
+            self.assertEqual(install.returncode, 0, install.stderr)
+            self.assertIn("AegisAgent installed.", install.stdout)
+            command_lookup = subprocess.run(["sh", "-c", "command -v aegis"], text=True, capture_output=True, check=False, env=env)
+            self.assertEqual(command_lookup.returncode, 0, command_lookup.stderr)
+            self.assertEqual(Path(command_lookup.stdout.strip()).resolve(), (bin_dir / "aegis").resolve())
+
+            commands = [
+                ("default", ["aegis"]),
+                ("activation", ["aegis", "activation"]),
+                ("setup next", ["aegis", "setup", "next"]),
+                ("setup model", ["aegis", "setup", "model"]),
+                ("setup checks", ["aegis", "setup", "--run-checks"]),
+                ("health", ["aegis", "health"]),
+                ("audit", ["aegis", "audit", "verify"]),
+                ("tui print", ["aegis", "tui", "--print", "--width", "100", "--height", "32"]),
+            ]
+            outputs: dict[str, str] = {}
+            for label, command in commands:
+                result = subprocess.run(command, text=True, capture_output=True, check=False, env=env)
+                self.assertEqual(result.returncode, 0, f"{label}\nSTDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}")
+                combined = result.stdout + result.stderr
+                outputs[label] = combined
+                self.assertNotIn("gateway_started: true", combined)
+                self.assertNotIn('"gateway_started": true', combined)
+
+            self.assertIn("AEGIS TERMINAL ACTIVATION", outputs["default"])
+            self.assertIn("browser_auto_launch: false", outputs["activation"])
+            self.assertIn("browser_auto_launch: false", outputs["setup next"])
+            self.assertIn("browser_auto_launch: false", outputs["setup model"])
+            self.assertIn('"browser_auto_launch": false', outputs["setup checks"])
+            self.assertIn('"ok": true', outputs["health"])
+            self.assertIn('"ok": true', outputs["audit"])
+            self.assertIn("Optional web is preview-only until explicitly approved.", outputs["tui print"])
+
+            (source / "install-smoke-version.txt").write_text("v2\n", encoding="utf-8")
+            subprocess.run(["git", "add", "install-smoke-version.txt"], cwd=source, text=True, capture_output=True, check=True)
+            subprocess.run(["git", "commit", "-m", "Update install smoke"], cwd=source, text=True, capture_output=True, check=True)
+            subprocess.run(["git", "push", "origin", "main"], cwd=source, text=True, capture_output=True, check=True)
+            update = subprocess.run(["aegis", "update", "--approved"], text=True, capture_output=True, check=False, env=env)
+
+            self.assertEqual(update.returncode, 0, update.stderr)
+            self.assertIn("AEGIS TERMINAL UPDATE", update.stdout)
+            self.assertIn("status      ok", update.stdout)
+            self.assertIn("browser_auto_launch: false", update.stdout)
+            self.assertTrue((install_dir / "install-smoke-version.txt").exists())
+            audit_text = (install_dir / ".aegisagent" / "audit.jsonl").read_text(encoding="utf-8")
+            self.assertIn("lifecycle.update", audit_text)
+            self.assertIn('"browser_auto_launch": false', audit_text)
+            self.assertFalse(sentinel.exists(), sentinel.read_text(encoding="utf-8") if sentinel.exists() else "")
 
     def test_skills_cli_reports_trust_summary_and_safety_flags(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -542,6 +692,59 @@ class CliTests(unittest.TestCase):
         self.assertIn("usage: aegis tui", help_result.stdout)
         self.assertEqual(completion.returncode, 0, completion.stderr)
         self.assertIn("complete -F _aegis aegis", completion.stdout)
+
+    @unittest.skipUnless(os.name == "posix", "PTY smoke requires a POSIX terminal")
+    def test_installed_shim_launches_live_tui_in_pty_without_browser(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp) / "workspace"
+            workspace.mkdir()
+            (workspace / "src").symlink_to((Path.cwd() / "src").resolve(), target_is_directory=True)
+            bin_dir = Path(tmp) / "bin"
+            fake_bin = Path(tmp) / "fake-bin"
+            sentinel = Path(tmp) / "browser-launch-sentinel.log"
+            fake_bin.mkdir()
+            for name in ("open", "xdg-open"):
+                fake = fake_bin / name
+                fake.write_text(f"#!/usr/bin/env sh\necho \"$0 $@\" >> {shlex.quote(str(sentinel))}\nexit 66\n", encoding="utf-8")
+                fake.chmod(0o755)
+            installed = run_cli("install", "shim", "--bin-dir", str(bin_dir), "--approved", cwd=str(workspace))
+            self.assertEqual(installed.returncode, 0, installed.stderr)
+
+            master, slave = pty.openpty()
+            fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 40, 120, 0, 0))
+            env = {
+                **os.environ,
+                "AEGIS_PYTHON": sys.executable,
+                "PATH": f"{fake_bin}:{os.environ.get('PATH', '')}",
+                "TERM": "xterm-256color",
+                "COLUMNS": "120",
+                "LINES": "40",
+            }
+            proc = subprocess.Popen(
+                [str(bin_dir / "aegis")],
+                stdin=slave,
+                stdout=slave,
+                stderr=slave,
+                env=env,
+                close_fds=True,
+            )
+            os.close(slave)
+            transcript = ""
+            try:
+                transcript = read_pty_until(master, ("AEGIS SHIELD", "aegis>"), timeout=8.0)
+                os.write(master, b"/activation\r")
+                transcript = read_pty_until(master, ("Opened: /activation", "serve web:"), initial=transcript, timeout=8.0)
+            finally:
+                if proc.poll() is None:
+                    proc.kill()
+                    proc.wait(timeout=5)
+                os.close(master)
+
+        self.assertIn("AEGIS SHIELD", transcript)
+        self.assertIn("Opened: /activation", transcript)
+        self.assertIn("serve web:", transcript)
+        self.assertNotIn("gateway_started: true", transcript)
+        self.assertFalse(sentinel.exists(), sentinel.read_text(encoding="utf-8") if sentinel.exists() else "")
 
     def test_install_shim_rejects_invalid_command_names_without_writing(self):
         for name in ("bad/name", "bad name", "bad;name"):

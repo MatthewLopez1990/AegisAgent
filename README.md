@@ -128,7 +128,7 @@ The installer:
 - clones `https://github.com/MatthewLopez1990/AegisAgent.git` into
   `~/.aegis-agent`
 - writes the terminal command shim to `~/.local/bin/aegis`
-- prints the PATH line if your shell cannot find `aegis`
+- prints a PATH line you can add if your shell cannot find `aegis`
 - stays terminal-only and does not open a browser
 - does not start the web gateway
 - does not call model providers

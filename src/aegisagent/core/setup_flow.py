@@ -343,6 +343,18 @@ def format_setup_section(section: SetupSection) -> str:
         lines.extend(["", "checks"])
         for check in section.checks:
             lines.append("- " + json.dumps(check, sort_keys=True))
+    lines.extend(
+        [
+            "",
+            "safety",
+            "- terminal_first: true",
+            "- browser_required: false",
+            "- browser_auto_launch: false",
+            "- gateway_started: false",
+            "- external_action_started: false",
+            "- raw_secret_values_included: false",
+        ]
+    )
     return "\n".join(lines)
 
 

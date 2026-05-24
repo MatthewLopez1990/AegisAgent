@@ -7,6 +7,25 @@ BIN_DIR="${AEGIS_BIN_DIR:-$HOME/.local/bin}"
 COMMAND_NAME="${AEGIS_COMMAND_NAME:-aegis}"
 REPO_URL="${AEGIS_REPO_URL:-https://github.com/MatthewLopez1990/AegisAgent.git}"
 
+need_command() {
+  if ! command -v "$1" >/dev/null 2>&1; then
+    echo "missing required command: $1" >&2
+    exit 1
+  fi
+}
+
+require_python_version() {
+  python3 - <<'PY'
+import sys
+
+minimum = (3, 12)
+if sys.version_info < minimum:
+    version = ".".join(str(part) for part in sys.version_info[:3])
+    sys.stderr.write("python3 3.12 or newer is required; found {}\n".format(version))
+    raise SystemExit(1)
+PY
+}
+
 validate_branch() {
   case "$BRANCH" in
     ""|-*|*..*|*\\*|*~*|*^*|*:*|*[\ \	]*)
@@ -39,6 +58,9 @@ if [ ! -d "$INSTALL_DIR/.git" ]; then
   exit 1
 fi
 
+need_command git
+need_command python3
+require_python_version
 validate_branch
 
 current_url="$(git -C "$INSTALL_DIR" remote get-url origin 2>/dev/null || true)"

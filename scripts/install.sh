@@ -14,6 +14,18 @@ need_command() {
   fi
 }
 
+require_python_version() {
+  python3 - <<'PY'
+import sys
+
+minimum = (3, 12)
+if sys.version_info < minimum:
+    version = ".".join(str(part) for part in sys.version_info[:3])
+    sys.stderr.write("python3 3.12 or newer is required; found {}\n".format(version))
+    raise SystemExit(1)
+PY
+}
+
 validate_branch() {
   case "$BRANCH" in
     ""|-*|*..*|*\\*|*~*|*^*|*:*|*[\ \	]*)
@@ -60,6 +72,7 @@ require_clean_checkout() {
 
 need_command git
 need_command python3
+require_python_version
 validate_branch
 
 mkdir -p "$BIN_DIR"
