@@ -96,6 +96,10 @@ class AgentRuntime:
                         "worker_providers": sorted({row["provider"] for row in worker_provider_metadata if row.get("provider")}),
                         "worker_external_calls": sum(1 for row in worker_provider_metadata if row.get("external_model_invocation_performed")),
                         "worker_fallback_count": sum(1 for row in worker_provider_metadata if row.get("fallback_used")),
+                        "artifact_count": len(delegation.artifacts),
+                        "artifact_ids": [artifact["id"] for artifact in delegation.artifacts],
+                        "worker_artifact_ids": [[artifact["id"] for artifact in worker.artifacts] for worker in delegation.workers],
+                        "worker_input_artifacts_by_role": {worker.role: worker.input_artifacts for worker in delegation.workers},
                         "event_count": len(delegation.events),
                         "receipt_id": delegation.receipt_id,
                     },
@@ -150,6 +154,8 @@ class AgentRuntime:
                 "delegated_worker_usage_ids": _delegated_worker_usage_ids(tool_results),
                 "delegated_worker_providers": _delegated_worker_providers(tool_results),
                 "delegated_worker_external_calls": _delegated_worker_external_calls(tool_results),
+                "delegated_artifact_count": _delegated_artifact_count(tool_results),
+                "delegated_artifact_ids": _delegated_artifact_ids(tool_results),
                 "model_invocation_performed": True,
                 "external_model_invocation_performed": bool(response.metadata.get("external_model_invocation_performed")),
                 "provider_route_status": response.metadata.get("provider_route_status", ""),
@@ -209,6 +215,8 @@ def _worker_provider_metadata(worker: dict[str, Any]) -> dict[str, Any]:
         "fallback_provider": str(worker.get("fallback_provider") or ""),
         "external_model_invocation_performed": bool(worker.get("external_model_invocation_performed")),
         "usage_id": str(worker.get("usage_id") or ""),
+        "artifact_ids": [str(artifact.get("id")) for artifact in worker.get("artifacts", []) if isinstance(artifact, dict) and artifact.get("id")],
+        "input_artifacts": [str(item) for item in worker.get("input_artifacts", []) if item],
         "browser_auto_launch": False,
         "raw_secret_values_included": False,
     }
@@ -239,6 +247,21 @@ def _delegated_worker_providers(tool_results: list[RuntimeToolResult]) -> list[s
 
 def _delegated_worker_external_calls(tool_results: list[RuntimeToolResult]) -> int:
     return sum(1 for row in _delegated_worker_rows(tool_results) if row.get("external_model_invocation_performed"))
+
+
+def _delegated_artifact_count(tool_results: list[RuntimeToolResult]) -> int:
+    return len(_delegated_artifact_ids(tool_results))
+
+
+def _delegated_artifact_ids(tool_results: list[RuntimeToolResult]) -> list[str]:
+    ids: list[str] = []
+    for result in tool_results:
+        if result.name != "subagents.delegate":
+            continue
+        artifact_ids = result.metadata.get("artifact_ids", [])
+        if isinstance(artifact_ids, list):
+            ids.extend(str(item) for item in artifact_ids if item)
+    return ids
 
 
 def _extract_session_search_query(prompt: str) -> str:

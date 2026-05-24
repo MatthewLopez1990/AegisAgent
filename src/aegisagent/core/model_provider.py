@@ -20,6 +20,7 @@ class ModelRequest:
     transcript: list[dict[str, Any]]
     workspace: Path
     tool_results: list[dict[str, Any]] = field(default_factory=list)
+    context_artifacts: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass(frozen=True, slots=True)
@@ -461,6 +462,9 @@ def _messages_for_request(request: ModelRequest) -> list[dict[str, str]]:
     tool_summary = ""
     if request.tool_results:
         tool_summary = "\n\nTyped tool results:\n" + json.dumps(request.tool_results[-6:], indent=2)[:8000]
+    artifact_summary = ""
+    if request.context_artifacts:
+        artifact_summary = "\n\nContext artifacts:\n" + json.dumps(_artifact_context(request.context_artifacts), indent=2)[:8000]
     recent = []
     for message in request.transcript[-8:]:
         role = str(message.get("role") or "")
@@ -479,8 +483,26 @@ def _messages_for_request(request: ModelRequest) -> list[dict[str, str]]:
             ),
         },
         *recent,
-        {"role": "user", "content": f"Workspace: {request.workspace}{tool_summary}"},
+        {"role": "user", "content": f"Workspace: {request.workspace}{tool_summary}{artifact_summary}"},
     ]
+
+
+def _artifact_context(artifacts: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for artifact in artifacts[-8:]:
+        if not isinstance(artifact, dict):
+            continue
+        rows.append(
+            {
+                "id": str(artifact.get("id") or ""),
+                "role": str(artifact.get("role") or ""),
+                "title": str(artifact.get("title") or ""),
+                "kind": str(artifact.get("kind") or ""),
+                "summary": str(artifact.get("summary") or "")[:1200],
+                "input_artifacts": [str(item) for item in artifact.get("input_artifacts", []) if item],
+            }
+        )
+    return rows
 
 
 def _content_from_openai_payload(payload: dict[str, Any]) -> str:

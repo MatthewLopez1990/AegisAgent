@@ -165,8 +165,11 @@ aegis model usage
 ```
 
 `aegis agents delegate` runs planner, researcher, implementer, and reviewer
-workers through the active provider route, records isolated sessions and usage
-metadata, and falls back locally if an attempted external route fails.
+workers through the active provider route, records isolated sessions, scoped
+usage metadata, durable role artifacts, input-artifact handoff metadata, and
+audit receipts, and falls back locally if an attempted external route fails.
+Later-stage workers receive prior worker artifact summaries while preserving the
+same bounded role contracts and approval model.
 
 ## Common Commands
 
@@ -302,12 +305,15 @@ workspace tools, governed git operations, task queues, automations,
 OpenAI-compatible model routing for chat and role workers, scoped model usage
 ledger rows, connector metadata with a redacted approval-bound outbox, memory
 review controls, passive skill trust metadata, and local agent/subagent
-orchestration with provider fallback metadata.
+orchestration with provider fallback metadata, durable role artifacts, and
+artifact handoff metadata.
 
 Partial: web console parity, live connectors, self-improvement, richer browser
-automation, multi-provider fallback ordering, subscription bridge readiness, and
-deeper agent delegation.
+automation, artifact list/show/search, cross-delegation artifact reuse,
+multi-provider fallback ordering, subscription bridge readiness, richer
+role-specific tool budgets, and higher-depth delegation controls.
 
-Next: worker-to-worker artifacts, richer role-specific tool budgets, live
-browser control behind explicit approval, broader integrations, signed skill
-trust, and packaged release flows.
+Next: artifact browsing and reuse across delegations, richer role-specific tool
+budgets, higher-depth delegation controls, final synthesis over artifact graphs,
+live browser control behind explicit approval, broader integrations, signed
+skill trust, and packaged release flows.

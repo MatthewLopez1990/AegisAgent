@@ -1860,6 +1860,14 @@ class CliTests(unittest.TestCase):
             payload = json.loads(result.stdout)
             self.assertEqual(payload["root"]["status"], "completed")
             self.assertEqual([worker["role"] for worker in payload["workers"]], ["planner", "researcher", "implementer", "reviewer"])
+            self.assertEqual(payload["artifact_count"], 4)
+            self.assertEqual(len(payload["artifacts"]), 4)
+            self.assertTrue(all(worker["artifacts"] for worker in payload["workers"]))
+            planner_artifact = next(worker["artifacts"][0]["id"] for worker in payload["workers"] if worker["role"] == "planner")
+            researcher_artifact = next(worker["artifacts"][0]["id"] for worker in payload["workers"] if worker["role"] == "researcher")
+            implementer_artifact = next(worker["artifacts"][0]["id"] for worker in payload["workers"] if worker["role"] == "implementer")
+            self.assertEqual(next(worker["input_artifacts"] for worker in payload["workers"] if worker["role"] == "implementer"), [planner_artifact, researcher_artifact])
+            self.assertEqual(next(worker["input_artifacts"] for worker in payload["workers"] if worker["role"] == "reviewer"), [planner_artifact, researcher_artifact, implementer_artifact])
             listing = run_cli("subagents", cwd=tmp)
             self.assertEqual(listing.returncode, 0, listing.stderr)
             self.assertEqual(len(json.loads(listing.stdout)["records"]), 5)
@@ -1878,9 +1886,15 @@ class CliTests(unittest.TestCase):
                 length = int(self.headers.get("Content-Length", "0"))
                 payload = json.loads(self.rfile.read(length).decode("utf-8"))
                 seen["bodies"].append(payload)
+                joined = "\n".join(str(message.get("content", "")) for message in payload.get("messages", []))
+                role = "worker"
+                for candidate in ("planner", "researcher", "implementer", "reviewer"):
+                    if f"You are the {candidate} subagent" in joined:
+                        role = candidate
+                        break
                 body = json.dumps(
                     {
-                        "choices": [{"message": {"content": "external worker response"}}],
+                        "choices": [{"message": {"content": f"A101_{role.upper()}_ARTIFACT external worker response"}}],
                         "usage": {"prompt_tokens": 7, "completion_tokens": 2, "total_tokens": 9},
                     }
                 ).encode("utf-8")
@@ -1926,6 +1940,19 @@ class CliTests(unittest.TestCase):
                 sent = "\n".join(json.dumps(body) for body in seen["bodies"])
                 for role in ("planner", "researcher", "implementer", "reviewer"):
                     self.assertIn(f"You are the {role} subagent", sent)
+                text_by_role = {}
+                for body in seen["bodies"]:
+                    joined = "\n".join(str(message.get("content", "")) for message in body.get("messages", []))
+                    for role in ("planner", "researcher", "implementer", "reviewer"):
+                        if f"You are the {role} subagent" in joined:
+                            text_by_role[role] = joined
+                self.assertIn("A101_PLANNER_ARTIFACT", text_by_role["implementer"])
+                self.assertIn("A101_RESEARCHER_ARTIFACT", text_by_role["implementer"])
+                self.assertIn("A101_PLANNER_ARTIFACT", text_by_role["reviewer"])
+                self.assertIn("A101_RESEARCHER_ARTIFACT", text_by_role["reviewer"])
+                self.assertIn("A101_IMPLEMENTER_ARTIFACT", text_by_role["reviewer"])
+                self.assertNotIn("A101_REVIEWER_ARTIFACT", text_by_role["implementer"])
+                self.assertEqual(payload["artifact_count"], 4)
 
                 usage = run_cli("model", "usage", cwd=tmp)
                 self.assertEqual(usage.returncode, 0, usage.stderr)

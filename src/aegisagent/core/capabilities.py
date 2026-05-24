@@ -98,9 +98,9 @@ CAPABILITIES: tuple[Capability, ...] = (
         "agents_subagents",
         "Agents and subagents",
         "partial",
-        "Planner, researcher, implementer, and reviewer workers can run through the active model provider route with local fallback, isolated sessions, bounded concurrency, visible role contracts, usage ledger entries, and audit receipts.",
+        "Planner, researcher, implementer, and reviewer workers can run through the active model provider route with local fallback, isolated sessions, bounded concurrency, visible role contracts, scoped usage ledger entries, durable role artifacts, input-artifact handoff metadata, and audit receipts.",
         "primary",
-        "Add worker-to-worker artifacts, deeper role-specific tool budgets, and higher-depth delegation.",
+        "Add artifact list/show/search, cross-delegation artifact reuse with approval, richer role-specific tool budgets, higher-depth delegation controls, and final synthesis over artifact graphs.",
         ("aegis agents", "aegis agents contracts", "aegis agents delegate <task>", "/agents bg <task>"),
     ),
     Capability(

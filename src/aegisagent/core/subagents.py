@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import hashlib
 import json
 import os
 import signal
@@ -19,6 +20,7 @@ from aegisagent.core.provider_config import ProviderUsageStore
 from aegisagent.core.sessions import SessionStore
 from aegisagent.models import utc_now
 from aegisagent.security.audit import AuditLog
+from aegisagent.security.redaction import redact_text
 
 
 @dataclass(frozen=True)
@@ -170,6 +172,8 @@ class SubagentRecord:
     fallback_used: bool = False
     fallback_provider: str = ""
     primary_provider: str = ""
+    artifacts: list[dict[str, Any]] = field(default_factory=list)
+    input_artifacts: list[str] = field(default_factory=list)
     created_at: str = field(default_factory=utc_now)
     updated_at: str = field(default_factory=utc_now)
 
@@ -193,6 +197,8 @@ class SubagentRecord:
             "fallback_used": self.fallback_used,
             "fallback_provider": self.fallback_provider,
             "primary_provider": self.primary_provider,
+            "artifacts": self.artifacts,
+            "input_artifacts": self.input_artifacts,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
         }
@@ -218,6 +224,8 @@ class SubagentRecord:
             fallback_used=bool(data.get("fallback_used")),
             fallback_provider=str(data.get("fallback_provider") or ""),
             primary_provider=str(data.get("primary_provider") or ""),
+            artifacts=[artifact for artifact in data.get("artifacts", []) if isinstance(artifact, dict)],
+            input_artifacts=[str(item) for item in data.get("input_artifacts", [])],
             created_at=str(data.get("created_at") or utc_now()),
             updated_at=str(data.get("updated_at") or utc_now()),
         )
@@ -271,6 +279,7 @@ class SubagentWorkerResult:
     total_tokens: int | None = None
     primary_provider: str = ""
     redacted: bool = False
+    input_artifacts: tuple[str, ...] = ()
 
     def metadata(self) -> dict[str, Any]:
         return {
@@ -385,13 +394,23 @@ class SubagentDelegationResult:
     events: list[SubagentEvent] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
+        artifacts = self.artifacts
         return {
             "root": self.root.to_dict(),
             "workers": [worker.to_dict() for worker in self.workers],
             "receipt_id": self.receipt_id,
             "announce_back": self.announce_back,
+            "artifact_count": len(artifacts),
+            "artifacts": artifacts,
             "events": [event.to_dict() for event in self.events],
         }
+
+    @property
+    def artifacts(self) -> list[dict[str, Any]]:
+        rows: list[dict[str, Any]] = []
+        for worker in self.workers:
+            rows.extend(worker.artifacts)
+        return rows
 
     @property
     def announce_back(self) -> str:
@@ -399,6 +418,8 @@ class SubagentDelegationResult:
         route = _delegation_route_summary(self.workers)
         if route:
             lines.append(f"model: {route}")
+        if self.artifacts:
+            lines.append(f"artifacts: {len(self.artifacts)} durable role artifacts")
         for worker in self.workers:
             prefix = worker.role if route else f"{worker.role} [{_worker_route_label(worker)}]"
             lines.append(f"- {prefix}: {worker.summary}")
@@ -543,20 +564,6 @@ class LocalSubagentOrchestrator:
             child = queue.spawn(task, parent_id=root.id, role=role, session_id=child_session.id)
             child.status = "running"
             contract = _profile_contract(role)
-            self.sessions.append(
-                child.session_id,
-                "user",
-                _role_prompt(role, task),
-                metadata={
-                    "source": "subagent",
-                    "role": role,
-                    "parent_session_id": root.session_id,
-                    "contract_version": AGENT_CONTRACT_VERSION,
-                    "context_contract": contract["context_contract"],
-                    "deliverable": contract["deliverable"],
-                    "tool_budget": contract["tool_budget"],
-                },
-            )
             self.store.save(child)
             self._event(events, root.id, "worker.started", f"{role} started", role=role, worker_id=child.id, event_sink=event_sink)
             self.audit.append(
@@ -572,99 +579,138 @@ class LocalSubagentOrchestrator:
             )
             workers.append(child)
 
-        max_workers = max(1, min(len(workers), self.limits.max_concurrency - 1))
+        max_workers = max(1, min(2, self.limits.max_concurrency - 1))
         completed: dict[str, SubagentWorkerResult] = {}
-        with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="aegis-subagent") as executor:
-            future_to_worker = {
-                executor.submit(
-                    _run_role_worker,
-                    self.paths,
-                    worker.role,
-                    task,
-                    worker.session_id,
-                    self.sessions.transcript(worker.session_id, limit=12),
-                ): worker
-                for worker in workers
-            }
-            for future in as_completed(future_to_worker):
-                worker = future_to_worker[future]
-                completed[worker.id] = future.result()
-
-        workers_by_id = {worker.id: worker for worker in workers}
+        workers_by_role = {worker.role: worker for worker in workers}
         workers = []
-        for worker_id in sorted(workers_by_id, key=lambda item: ("planner", "researcher", "implementer", "reviewer").index(workers_by_id[item].role)):
-            child = workers_by_id[worker_id]
-            worker_result = completed[child.id]
-            child.summary = worker_result.summary
-            child.provider = worker_result.provider
-            child.provider_mode = worker_result.provider_mode
-            child.provider_route_status = worker_result.provider_route_status
-            child.model_invocation_performed = worker_result.model_invocation_performed
-            child.external_model_invocation_performed = worker_result.external_model_invocation_performed
-            child.fallback_used = worker_result.fallback_used
-            child.fallback_provider = worker_result.fallback_provider
-            child.primary_provider = worker_result.primary_provider
-            child.status = "completed"
-            worker_receipt = self.audit.append(
-                "subagent.worker.completed",
-                {
-                    "root_id": root.id,
-                    "worker_id": child.id,
-                    "role": child.role,
-                    "status": child.status,
-                    "contract_version": AGENT_CONTRACT_VERSION,
-                    "deliverable": _profile_contract(child.role)["deliverable"],
-                    **worker_result.metadata(),
-                    "external_action_started": False,
-                },
-            )
-            usage = ProviderUsageStore(self.paths).record(
-                provider=worker_result.provider,
-                mode=worker_result.provider_mode,
-                status="completed",
-                session_id=child.session_id,
-                source=f"subagent.{child.role}",
-                prompt_chars=worker_result.prompt_chars,
-                assistant_chars=worker_result.assistant_chars,
-                external_model_invocation_performed=worker_result.external_model_invocation_performed,
-                provider_route_status=worker_result.provider_route_status,
-                primary_provider=worker_result.primary_provider,
-                fallback_used=worker_result.fallback_used,
-                fallback_provider=worker_result.fallback_provider,
-                prompt_tokens=worker_result.prompt_tokens,
-                completion_tokens=worker_result.completion_tokens,
-                total_tokens=worker_result.total_tokens,
-                receipt_id=worker_receipt["id"],
-                redacted=worker_result.redacted,
-                scope="subagent_worker",
-                parent_session_id=parent_session_id,
-                subagent_root_id=root.id,
-                worker_id=child.id,
-                worker_role=child.role,
-            )
-            child.usage_id = usage["id"]
-            self.sessions.append(
-                child.session_id,
-                "assistant",
-                child.summary,
-                metadata={"source": "subagent", "role": child.role, "usage_id": child.usage_id, **worker_result.metadata()},
-            )
-            self.store.save(child)
-            self._event(
-                events,
-                root.id,
-                "worker.completed",
-                f"{child.role} completed via {child.provider}: {child.summary}",
-                role=child.role,
-                worker_id=child.id,
-                event_sink=event_sink,
-            )
-            workers.append(child)
+        artifacts: list[dict[str, Any]] = []
+
+        for stage_index, stage_roles in enumerate((("planner", "researcher"), ("implementer",), ("reviewer",)), start=1):
+            stage_workers = [workers_by_role[role] for role in stage_roles]
+            with ThreadPoolExecutor(max_workers=min(max_workers, len(stage_workers)), thread_name_prefix="aegis-subagent") as executor:
+                future_to_worker = {}
+                for worker in stage_workers:
+                    prompt = _role_prompt(worker.role, task, artifacts)
+                    contract = _profile_contract(worker.role)
+                    worker.input_artifacts = [artifact["id"] for artifact in artifacts]
+                    self.sessions.append(
+                        worker.session_id,
+                        "user",
+                        prompt,
+                        metadata={
+                            "source": "subagent",
+                            "role": worker.role,
+                            "parent_session_id": root.session_id,
+                            "contract_version": AGENT_CONTRACT_VERSION,
+                            "context_contract": contract["context_contract"],
+                            "deliverable": contract["deliverable"],
+                            "tool_budget": contract["tool_budget"],
+                            "stage": stage_index,
+                            "input_artifacts": worker.input_artifacts,
+                            "input_artifact_count": len(worker.input_artifacts),
+                        },
+                    )
+                    self.store.save(worker)
+                    future_to_worker[
+                        executor.submit(
+                            _run_role_worker,
+                            self.paths,
+                            worker.role,
+                            task,
+                            worker.session_id,
+                            self.sessions.transcript(worker.session_id, limit=12),
+                            artifacts,
+                        )
+                    ] = worker
+                for future in as_completed(future_to_worker):
+                    worker = future_to_worker[future]
+                    completed[worker.id] = future.result()
+
+            for child in sorted(stage_workers, key=lambda item: ("planner", "researcher", "implementer", "reviewer").index(item.role)):
+                worker_result = completed[child.id]
+                child.summary = worker_result.summary
+                child.provider = worker_result.provider
+                child.provider_mode = worker_result.provider_mode
+                child.provider_route_status = worker_result.provider_route_status
+                child.model_invocation_performed = worker_result.model_invocation_performed
+                child.external_model_invocation_performed = worker_result.external_model_invocation_performed
+                child.fallback_used = worker_result.fallback_used
+                child.fallback_provider = worker_result.fallback_provider
+                child.primary_provider = worker_result.primary_provider
+                child.input_artifacts = list(worker_result.input_artifacts)
+                child.artifacts = [_artifact_for_worker(self.paths, root.id, child, worker_result.input_artifacts)]
+                child.status = "completed"
+                worker_receipt = self.audit.append(
+                    "subagent.worker.completed",
+                    {
+                        "root_id": root.id,
+                        "worker_id": child.id,
+                        "role": child.role,
+                        "status": child.status,
+                        "contract_version": AGENT_CONTRACT_VERSION,
+                        "deliverable": _profile_contract(child.role)["deliverable"],
+                        "input_artifacts": child.input_artifacts,
+                        "artifact_ids": [artifact["id"] for artifact in child.artifacts],
+                        "artifact_count": len(child.artifacts),
+                        **worker_result.metadata(),
+                        "external_action_started": False,
+                    },
+                )
+                usage = ProviderUsageStore(self.paths).record(
+                    provider=worker_result.provider,
+                    mode=worker_result.provider_mode,
+                    status="completed",
+                    session_id=child.session_id,
+                    source=f"subagent.{child.role}",
+                    prompt_chars=worker_result.prompt_chars,
+                    assistant_chars=worker_result.assistant_chars,
+                    external_model_invocation_performed=worker_result.external_model_invocation_performed,
+                    provider_route_status=worker_result.provider_route_status,
+                    primary_provider=worker_result.primary_provider,
+                    fallback_used=worker_result.fallback_used,
+                    fallback_provider=worker_result.fallback_provider,
+                    prompt_tokens=worker_result.prompt_tokens,
+                    completion_tokens=worker_result.completion_tokens,
+                    total_tokens=worker_result.total_tokens,
+                    receipt_id=worker_receipt["id"],
+                    redacted=worker_result.redacted,
+                    scope="subagent_worker",
+                    parent_session_id=parent_session_id,
+                    subagent_root_id=root.id,
+                    worker_id=child.id,
+                    worker_role=child.role,
+                )
+                child.usage_id = usage["id"]
+                self.sessions.append(
+                    child.session_id,
+                    "assistant",
+                    child.summary,
+                    metadata={
+                        "source": "subagent",
+                        "role": child.role,
+                        "usage_id": child.usage_id,
+                        "input_artifacts": child.input_artifacts,
+                        "artifacts": child.artifacts,
+                        **worker_result.metadata(),
+                    },
+                )
+                self.store.save(child)
+                self._event(
+                    events,
+                    root.id,
+                    "worker.completed",
+                    f"{child.role} completed via {child.provider}: {child.summary}",
+                    role=child.role,
+                    worker_id=child.id,
+                    event_sink=event_sink,
+                )
+                artifacts.extend(child.artifacts)
+                workers.append(child)
 
         root.children = [worker.id for worker in workers]
-        root.summary = f"{len(workers)} model-backed local subagents completed bounded analysis for: {task}"
+        root.summary = f"{len(workers)} model-backed local subagents completed bounded analysis with {len(artifacts)} artifacts for: {task}"
         root.status = "completed"
-        self.sessions.append(root.session_id, "assistant", root.summary, metadata={"source": "subagent", "role": root.role})
+        self.sessions.append(root.session_id, "assistant", root.summary, metadata={"source": "subagent", "role": root.role, "artifact_ids": [artifact["id"] for artifact in artifacts]})
         self.store.save(root)
         self._event(events, root.id, "root.completed", root.summary, role=root.role, event_sink=event_sink)
         receipt = self.audit.append(
@@ -678,6 +724,10 @@ class LocalSubagentOrchestrator:
                 "worker_provider_route_statuses": [worker.provider_route_status for worker in workers],
                 "worker_usage_ids": [worker.usage_id for worker in workers],
                 "worker_fallback_count": sum(1 for worker in workers if worker.fallback_used),
+                "artifact_count": len(artifacts),
+                "artifact_ids": [artifact["id"] for artifact in artifacts],
+                "worker_artifact_ids": [[artifact["id"] for artifact in worker.artifacts] for worker in workers],
+                "worker_input_artifacts": [worker.input_artifacts for worker in workers],
                 "parent_session_id": parent_session_id,
                 "status": root.status,
                 "contract_version": AGENT_CONTRACT_VERSION,
@@ -856,10 +906,19 @@ def format_delegation(result: SubagentDelegationResult) -> str:
     route = _delegation_route_summary(result.workers)
     if route:
         lines.append(f"model     {route}")
+    artifacts = result.artifacts
+    if artifacts:
+        lines.append(f"artifacts {len(artifacts)} durable role artifacts")
     lines.extend(["", "workers"])
     for worker in result.workers:
         route_label = "" if route else f" {_worker_route_label(worker)} "
         lines.append(f"- {worker.role:<11} {worker.id}  {worker.status:<9}{route_label} {worker.summary}")
+    if artifacts:
+        lines.extend(["", "artifacts"])
+        for artifact in artifacts[:6]:
+            lines.append(f"- {artifact.get('role', ''):<11} {artifact.get('kind', ''):<18} {artifact.get('summary', '')}")
+        if len(artifacts) > 6:
+            lines.append(f"+ {len(artifacts) - 6} more artifacts; use --json for full metadata")
     return "\n".join(lines)
 
 
@@ -917,16 +976,17 @@ def format_agent_contracts(payload: dict[str, Any]) -> str:
 def format_subagent_records(records: list[dict[str, Any]]) -> str:
     if not records:
         return "SUBAGENTS\nNo persisted subagents yet. Use /subagents <task> to delegate bounded local work."
-    lines = ["SUBAGENTS", "role         status     provider             id          parent      task"]
+    lines = ["SUBAGENTS", "role         status     provider             art  id          parent      task"]
     for record in records[:20]:
         parent = record.get("parent_id") or "-"
         provider = str(record.get("provider") or "-")
         if len(provider) > 20:
             provider = provider[:17] + "..."
+        artifact_count = len(record.get("artifacts", [])) if isinstance(record.get("artifacts"), list) else 0
         task = str(record.get("task") or "")
         if len(task) > 42:
             task = task[:39] + "..."
-        lines.append(f"{record.get('role', ''):<12} {record.get('status', ''):<10} {provider:<20} {record.get('id', ''):<11} {parent:<11} {task}")
+        lines.append(f"{record.get('role', ''):<12} {record.get('status', ''):<10} {provider:<20} {artifact_count:<4} {record.get('id', ''):<11} {parent:<11} {task}")
     return "\n".join(lines)
 
 
@@ -997,7 +1057,7 @@ def _pid_alive(pid: int) -> bool:
     return True
 
 
-def _role_prompt(role: str, task: str) -> str:
+def _role_prompt(role: str, task: str, prior_artifacts: list[dict[str, Any]] | None = None) -> str:
     contract = _profile_contract(role)
     return (
         f"You are the {role} subagent.\n"
@@ -1009,8 +1069,16 @@ def _role_prompt(role: str, task: str) -> str:
     )
 
 
-def _run_role_worker(paths: RuntimePaths, role: str, task: str, session_id: str, transcript: list[dict[str, Any]]) -> SubagentWorkerResult:
-    prompt = _role_prompt(role, task)
+def _run_role_worker(
+    paths: RuntimePaths,
+    role: str,
+    task: str,
+    session_id: str,
+    transcript: list[dict[str, Any]],
+    prior_artifacts: list[dict[str, Any]] | None = None,
+) -> SubagentWorkerResult:
+    artifacts = prior_artifacts or []
+    prompt = _role_prompt(role, task, artifacts)
     provider, _route = provider_for_active_route(paths)
     response = provider.complete(
         ModelRequest(
@@ -1019,6 +1087,7 @@ def _run_role_worker(paths: RuntimePaths, role: str, task: str, session_id: str,
             transcript=transcript,
             workspace=paths.workspace,
             tool_results=[],
+            context_artifacts=artifacts,
         )
     )
     metadata = response.metadata
@@ -1038,6 +1107,7 @@ def _run_role_worker(paths: RuntimePaths, role: str, task: str, session_id: str,
         total_tokens=metadata.get("total_tokens") if isinstance(metadata.get("total_tokens"), int) else None,
         primary_provider=str(metadata.get("primary_provider") or ""),
         redacted=bool(metadata.get("redacted")),
+        input_artifacts=tuple(str(artifact.get("id", "")) for artifact in artifacts if artifact.get("id")),
     )
 
 
@@ -1062,6 +1132,56 @@ def _worker_summary_from_response(content: str, role: str, task: str) -> str:
         if contribution:
             return contribution
     return text or _role_summary(role, task)
+
+
+def _artifact_for_worker(paths: RuntimePaths, root_id: str, worker: SubagentRecord, input_artifacts: tuple[str, ...] | list[str]) -> dict[str, Any]:
+    artifact_id = f"artifact-{worker.role}-{worker.id}"
+    redacted = redact_text(worker.summary)
+    content = redacted.text
+    artifact_dir = paths.subagents_dir / "artifacts" / root_id
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    artifact_path = artifact_dir / f"{artifact_id}.md"
+    body = (
+        f"# {worker.role.title()} Artifact\n\n"
+        f"- Root: {root_id}\n"
+        f"- Worker: {worker.id}\n"
+        f"- Role: {worker.role}\n"
+        f"- Input artifacts: {', '.join(input_artifacts) if input_artifacts else 'none'}\n\n"
+        f"{content}\n"
+    )
+    artifact_path.write_text(body, encoding="utf-8")
+    encoded = body.encode("utf-8")
+    return {
+        "id": artifact_id,
+        "root_id": root_id,
+        "worker_id": worker.id,
+        "role": worker.role,
+        "kind": _artifact_kind(worker.role),
+        "title": _profile_contract(worker.role)["deliverable"],
+        "summary": content.splitlines()[0][:240] if content.splitlines() else content[:240],
+        "path": str(artifact_path),
+        "mime_type": "text/markdown",
+        "bytes": len(encoded),
+        "sha256": hashlib.sha256(encoded).hexdigest(),
+        "redacted": redacted.redacted,
+        "input_artifacts": list(input_artifacts),
+        "created_at": utc_now(),
+        "browser_auto_launch": False,
+        "external_action_started": False,
+        "raw_secret_values_included": False,
+    }
+
+
+def _artifact_kind(role: str) -> str:
+    if role == "planner":
+        return "checkpoint_plan"
+    if role == "researcher":
+        return "evidence_summary"
+    if role == "implementer":
+        return "implementation_patch"
+    if role == "reviewer":
+        return "review_findings"
+    return "role_artifact"
 
 
 def _delegation_route_summary(workers: list[SubagentRecord]) -> str:
