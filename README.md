@@ -1,29 +1,36 @@
 # AegisAgent
 
-AegisAgent is a terminal-first autonomous agent console with visible governance.
-Install it, run `aegis`, and work from the terminal TUI.
+AegisAgent is a terminal-first agent console. Install it, run `aegis`, and work
+from the terminal UI.
 
-It is built toward a secure Hermes-style workflow: prompt-first chat, slash
-commands, typed tools, local memory, task queues, subagents, automations, audit
-receipts, and explicit approval gates.
+It is being built toward a secure Hermes-style workflow: prompt-first chat,
+slash commands, typed local tools, memory, task queues, subagents, automations,
+audit receipts, and explicit approval gates.
 
 AegisAgent does not open a browser during install, setup, update, launch, health
-checks, or normal terminal use. The web console is optional and must be started
-separately.
+checks, or normal terminal use. Setup does not launch a browser. The web console
+is optional and must be started separately.
 
-This repository and package are `AegisAgent`. Older `Aegis-Agent` references
-are historical design inputs, not the install target for this terminal command.
+This project is `AegisAgent`. Older `Aegis-Agent` references are historical
+design inputs, not the install target.
+
+## Quick Start
+
+```bash
+/bin/sh -c "$(curl -fsSL https://raw.githubusercontent.com/MatthewLopez1990/AegisAgent/main/scripts/install.sh)"
+export PATH="$HOME/.local/bin:$PATH"
+aegis activation
+aegis setup next
+aegis setup --run-checks
+aegis
+```
+
+`aegis` starts the terminal UI when your shell is interactive. Use `aegis tui`
+when you want the explicit command.
 
 ## Install On macOS Or Linux
 
-Prerequisites:
-
-- `git`
-- `curl`
-- `python3` 3.12 or newer
-- `sh`, `bash`, or `zsh`
-
-Install from GitHub:
+You need `git`, `curl`, and `python3` 3.12 or newer.
 
 ```bash
 python3 --version
@@ -31,115 +38,22 @@ git --version
 /bin/sh -c "$(curl -fsSL https://raw.githubusercontent.com/MatthewLopez1990/AegisAgent/main/scripts/install.sh)"
 ```
 
-Verify that your shell can find the command:
+The installer clones GitHub into `~/.aegis-agent` and writes the command shim to
+`~/.local/bin/aegis`.
+
+Verify the install:
 
 ```bash
 command -v aegis
 aegis activation
 ```
 
-If `command -v aegis` prints nothing, add the install bin directory to your
-shell path:
+If `command -v aegis` prints nothing, add this to `~/.zshrc`, `~/.bashrc`, or
+your shell profile, then open a new terminal:
 
 ```bash
 export PATH="$HOME/.local/bin:$PATH"
 ```
-
-Add that line to `~/.zshrc`, `~/.bashrc`, or your shell profile, then open a new
-terminal.
-
-## Start The Agent
-
-Run setup checks first:
-
-```bash
-aegis setup next
-aegis setup model
-aegis setup --run-checks
-```
-
-Then start the TUI:
-
-```bash
-aegis
-aegis tui
-```
-
-In an interactive terminal, `aegis` opens the terminal UI. `aegis tui` is the
-explicit equivalent. In a non-interactive shell, `aegis` prints the terminal
-activation card instead of opening a web server.
-
-On first launch, the TUI opens with the setup wizard visible. The prompt stays
-active while the wizard is open, so you can type a task, use slash commands, or
-move through the wizard cards. Use `/setup hide` when you want future launches
-to open directly to the prompt, and `/setup reset` to show the wizard again.
-
-Useful first commands inside the TUI:
-
-```text
-/setup next
-/setup first-task
-/commands
-/commands json
-/dashboard
-/setup hide
-```
-
-Then type normal requests into the prompt:
-
-```text
-summarize this workspace
-read file README.md
-git status
-run tests
-```
-
-Approval-gated TUI commands use `| approve`:
-
-```text
-/git stage README.md | approve
-/git commit Update README | approve
-/git remote pull origin main | approve
-```
-
-## Update From GitHub
-
-Update the installed checkout from GitHub:
-
-```bash
-aegis update --approved
-```
-
-That command performs a guarded fast-forward pull from `origin/main` inside the
-checkout used by the active `aegis` command. It refuses to update if the
-checkout has local changes or if the remote does not match the AegisAgent GitHub
-repository.
-
-After updating:
-
-```bash
-aegis health
-aegis audit verify
-```
-
-Recovery script, if the `aegis` shim is broken but `~/.aegis-agent` exists:
-
-```bash
-~/.aegis-agent/scripts/update.sh
-```
-
-## What The Installer Does
-
-The installer:
-
-- clones `https://github.com/MatthewLopez1990/AegisAgent.git` into
-  `~/.aegis-agent`
-- writes the terminal command shim to `~/.local/bin/aegis`
-- prints a PATH line you can add if your shell cannot find `aegis`
-- stays terminal-only and does not open a browser
-- does not start the web gateway
-- does not call model providers
-- does not ask for or store raw secret values
 
 Optional installer settings:
 
@@ -151,23 +65,101 @@ AEGIS_BRANCH="main"
 AEGIS_REPO_URL="https://github.com/MatthewLopez1990/AegisAgent.git"
 ```
 
-## Daily Commands
+## Start The Agent
+
+Run the setup checks first:
+
+```bash
+aegis setup next
+aegis setup model
+aegis setup --run-checks
+```
+
+Start the UI:
+
+```bash
+aegis
+aegis tui
+```
+
+Inside the UI, type normal requests:
+
+```text
+summarize this workspace
+read file README.md
+git status
+run tests
+```
+
+Use slash commands for direct actions:
+
+```text
+/setup next
+/setup first-task
+/commands
+/dashboard
+/tasks submit draft a safe plan
+/memory search terminal-first
+/model auth status
+```
+
+Commands that mutate files, git state, browser session records, or external
+state require explicit approval. In the TUI, approval uses `| approve`:
+
+```text
+/git stage README.md | approve
+/git commit Update README | approve
+/git remote pull origin main | approve
+```
+
+On first launch, the setup wizard is visible but the prompt remains active. Use
+`/setup hide` to open future launches directly to the prompt, and `/setup reset`
+to show the wizard again.
+
+## Update From GitHub
+
+Use this command to update the installed agent from GitHub onto the machine
+running it:
+
+```bash
+aegis update --approved
+```
+
+It runs a guarded fast-forward pull from `origin/main` inside the installed
+checkout. It refuses to update if local changes are present or if the remote is
+not the AegisAgent GitHub repository.
+
+If the `aegis` shim is broken but `~/.aegis-agent` still exists:
+
+```bash
+~/.aegis-agent/scripts/update.sh
+```
+
+After updating:
+
+```bash
+aegis health
+aegis audit verify
+```
+
+## Common Terminal Commands
 
 ```bash
 aegis                         # start the terminal UI
 aegis tui                     # explicit terminal UI launch
-aegis init                    # compatibility alias for setup quickstart
-aegis activate                # launch TUI in a TTY, activation card otherwise
-aegis activation              # print terminal activation/readiness card
-aegis commands                # show terminal slash-command lanes
-aegis commands setup          # filter command lanes by setup/onboarding terms
+aegis init                    # setup quickstart alias
+aegis activation              # print terminal readiness card
+aegis commands                # show slash-command lanes
 aegis setup next              # show the next setup action
-aegis setup model             # review or configure the model route
+aegis setup model             # review model route setup
 aegis setup --run-checks      # run metadata-only readiness checks
-aegis health                  # check runtime posture
-aegis audit verify            # verify the append-only audit hash chain
-aegis dashboard               # show operator status
-aegis capabilities --gaps     # show remaining capability gaps
+aegis model auth status       # show read-only model auth posture
+aegis models doctor           # alias for model doctor checks
+aegis task submit "do work"   # singular alias for task queue submit
+aegis tasks --events <id>     # canonical task timeline
+aegis memory search <query>   # search local memory
+aegis memory index            # index curated memory files
+aegis audit verify            # verify append-only audit hash chain
 aegis update --approved       # pull latest main from GitHub
 ```
 
@@ -175,42 +167,63 @@ More commands are listed in [docs/operator-reference.md](docs/operator-reference
 
 ## Compatibility Aliases
 
-The canonical command is `aegis`. The Python package also exposes
-`aegisagent` for source and package workflows.
+The canonical command is `aegis`. The Python package also exposes `aegisagent`
+for source and package workflows.
 
-Implemented setup aliases are intentionally small and terminal-only:
+These aliases are migration aids for older agent command habits. They normalize
+to current AegisAgent terminal commands before dispatch. They do not mean the old
+agent surface or Hermes command set is fully implemented.
+
+Canonical commands remain the commands to teach, document, and automate. Use the
+aliases only when an older idiom maps directly to existing terminal-only Aegis
+behavior.
 
 ```bash
-aegis setup init              # setup quickstart
-aegis setup initialize        # setup quickstart
-aegis setup model-auth        # same setup section as model
-aegis setup 1                 # hidden setup step alias for model
-aegis setup 6                 # hidden setup step alias for memory
-aegis setup check             # same readiness receipt as --run-checks
-aegis setup checks            # same readiness receipt as --run-checks
-aegis setup verify            # same readiness receipt as --run-checks
-aegis setup doctor            # same readiness receipt as --run-checks
-aegis setup connections       # same setup section as connectors
-aegis setup skills            # same setup section as memory
-aegis setup plugins           # same setup section as memory
+aegis task list
+aegis task submit "draft a safe plan"
+aegis task status <task-id>
+aegis task timeline <task-id>
+aegis task output <task-id>
+aegis task logs <task-id>
+aegis task recover
+aegis models providers
+aegis models doctor
+aegis model auth status
+aegis model auth methods
+aegis model auth doctor
+aegis memory search <query>
+aegis memory index
+aegis setup model-auth
+aegis setup check
+aegis setup verify
+aegis setup connections
+aegis setup skills
 ```
 
-Inside the TUI, the matching slash commands work the same way:
-`/setup model-auth`, `/setup verify`, `/setup connections`, and
-`/setup skills` route to the canonical setup screens. Hidden setup step numbers
-such as `/setup 1` through `/setup 6` are accepted for compatibility, but the
-named commands stay primary in help and completion.
+Unsupported old commands such as `model auth login`, `model auth logout`,
+`task pause`, `task resume`, and old external-memory management commands are not
+implemented.
+
+Inside the TUI, root shortcuts are intentionally small:
+
+```text
+/task                       exact root alias for /tasks
+/model                      exact root alias for /model providers
+/memory                     canonical memory index/search root
+```
+
+Root shortcuts do not create singular slash subcommand families; use
+`/tasks watch`, `/model doctor`, and `/memory add` for those workflows.
 
 ## Model And Secret Setup
 
 Aegis stores environment variable names for secrets, not raw secret values.
 
-Example:
-
 ```bash
 export OPENAI_API_KEY="..."
 aegis model configure openai/gpt-5.5 --mode api_key --api-key-env OPENAI_API_KEY
 aegis model doctor
+aegis model auth status
 ```
 
 Connector metadata follows the same pattern:

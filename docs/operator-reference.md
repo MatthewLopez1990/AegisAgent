@@ -51,9 +51,23 @@ aegis setup connections     connector setup section
 aegis setup skills          memory and skills setup section
 aegis setup plugins         memory and skills setup section
 aegis setup first-task      safe first terminal task guidance
+aegis task list             singular alias for task queue list
+aegis task submit <request> singular alias for task submit
+aegis task status <id>      singular alias for tasks show
+aegis task timeline <id>    singular alias for tasks events
+aegis task recover          singular alias for tasks recover-stale
+aegis models providers      alias for model providers
+aegis model auth status     read-only model auth status
+aegis model auth methods    read-only auth method inventory
+aegis model auth doctor     metadata-only auth doctor checks
+aegis memory search <query> alias for memory --query
+aegis memory index          alias for memory --index
 ```
 
 ```text
+/task                       exact root alias for /tasks
+/model                      exact root alias for /model providers
+/memory                     canonical memory index/search root
 /menu                       grouped command lanes
 /commands json              machine-readable terminal command catalog
 /activate                   activation card alias
@@ -73,6 +87,12 @@ aegis setup first-task      safe first terminal task guidance
 /improve apply-candidate    same as /improve apply
 /improve implemented        same as /improve complete
 ```
+
+Old-agent idioms are accepted only where they preserve the same governed Aegis
+behavior. Prefer the canonical command in runbooks.
+
+Root shortcuts do not create singular subcommand families; use `/tasks watch`,
+`/model doctor`, and `/memory add` for those workflows.
 
 ## TUI Slash Commands
 
@@ -101,6 +121,8 @@ aegis setup first-task      safe first terminal task guidance
 /tools
 /audit
 /memory
+/memory search <query>
+/memory index
 /memory list
 /memory show <entry-id>
 /memory delete <entry-id> | approve
@@ -134,6 +156,11 @@ aegis model providers
 aegis model configure openai/gpt-5.5 --mode api_key --api-key-env OPENAI_API_KEY
 aegis model doctor
 aegis model usage
+aegis model auth status
+aegis model auth methods
+aegis model auth doctor
+aegis models providers
+aegis models doctor
 aegis connectors
 aegis connectors configure slack --token-env SLACK_BOT_TOKEN --enable
 aegis connectors doctor
@@ -146,6 +173,9 @@ aegis chat "summarize this workspace"
 aegis tasks --submit "draft a safe plan"
 aegis tasks --background "draft a safe plan"
 aegis tasks --events <task-id>
+aegis task submit "draft a safe plan"
+aegis task status <task-id>
+aegis task timeline <task-id>
 aegis agents
 aegis agents profiles
 aegis agents contracts
@@ -163,6 +193,8 @@ aegis memory list --kind user
 aegis memory show <entry-id>
 aegis memory --query <text>
 aegis memory --index
+aegis memory search <text>
+aegis memory index
 aegis memory --kind user --title "<title>" --add "<body>" --approved
 aegis memory delete <entry-id> --approved
 ```

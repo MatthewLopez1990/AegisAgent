@@ -60,6 +60,16 @@ from aegisagent.tui.renderer import TuiState, render
 from aegisagent.tui.textual_app import run_textual_app
 
 
+def _add_model_arguments(model_parser: argparse.ArgumentParser) -> None:
+    model_parser.add_argument("model_command", nargs="?", default="providers", choices=["providers", "doctor", "configure", "usage", "auth"], help="Provider command to run.")
+    model_parser.add_argument("name", nargs="?", help="Provider name for configure, or auth status/methods/doctor.")
+    model_parser.add_argument("--mode", choices=["local", "api_key", "subscription_cli", "not_configured"], default="api_key")
+    model_parser.add_argument("--api-key-env", default="", help="Environment variable name that will hold the provider key; the value is never read into config.")
+    model_parser.add_argument("--base-url", default="", help="Optional provider base URL metadata; no network call is made.")
+    model_parser.add_argument("--inactive", action="store_true", help="Save the route without making it active.")
+    model_parser.add_argument("--limit", type=int, default=20, help="Limit recent model usage rows.")
+
+
 def build_parser() -> argparse.ArgumentParser:
     prog = "aegis"
     if sys.argv:
@@ -126,7 +136,7 @@ def build_parser() -> argparse.ArgumentParser:
     memory.add_argument("--kind", choices=["workspace", "user"], default="", help="Curated memory file to update or list.")
     memory.add_argument("--approved", action="store_true", help="Append the memory note after explicit operator approval.")
     memory.add_argument("--limit", type=int, default=20, help="Limit memory list or search results.")
-    memory.add_argument("memory_command", nargs="?", choices=["list", "show", "delete"], help="Review or delete curated memory entries.")
+    memory.add_argument("memory_command", nargs="?", choices=["list", "show", "delete", "search", "index"], help="Review, search, index, or delete curated memory entries.")
     memory.add_argument("memory_args", nargs="*", help="Memory entry id, for example user:abcdef123456.")
 
     sessions = sub.add_parser("sessions", help="Manage terminal sessions.")
@@ -170,13 +180,9 @@ def build_parser() -> argparse.ArgumentParser:
     chat.add_argument("--json", action="store_true", help="Emit the turn result as JSON.")
 
     model = sub.add_parser("model", help="Inspect or configure terminal model provider routes.")
-    model.add_argument("model_command", nargs="?", default="providers", choices=["providers", "doctor", "configure", "usage"], help="Provider command to run.")
-    model.add_argument("name", nargs="?", help="Provider name for configure, for example openai/gpt-5.5.")
-    model.add_argument("--mode", choices=["local", "api_key", "subscription_cli", "not_configured"], default="api_key")
-    model.add_argument("--api-key-env", default="", help="Environment variable name that will hold the provider key; the value is never read into config.")
-    model.add_argument("--base-url", default="", help="Optional provider base URL metadata; no network call is made.")
-    model.add_argument("--inactive", action="store_true", help="Save the route without making it active.")
-    model.add_argument("--limit", type=int, default=20, help="Limit recent model usage rows.")
+    _add_model_arguments(model)
+    models = sub.add_parser("models", help="Compatibility alias for model provider routes.")
+    _add_model_arguments(models)
 
     connectors = sub.add_parser("connectors", help="Inspect or configure connector readiness metadata.")
     connectors.add_argument("connector_command", nargs="?", default="list", choices=["list", "doctor", "configure"], help="Connector command to run.")
@@ -206,6 +212,11 @@ def build_parser() -> argparse.ArgumentParser:
     tasks.add_argument("--recover-stale", action="store_true", help="Mark running detached tasks failed when their worker pid is gone.")
     tasks.add_argument("--reason", default="Cancelled by operator.", help="Cancellation reason.")
     tasks.add_argument("--limit", type=int, default=20)
+    task = sub.add_parser("task", help="Compatibility alias for governed terminal tasks.")
+    task.add_argument("task_command", nargs="?", default="list", choices=["list", "submit", "bg", "background", "start", "run", "show", "status", "events", "timeline", "output", "outputs", "log", "logs", "cancel", "recover", "recover-stale"], help="Task alias command.")
+    task.add_argument("task_args", nargs="*", help="Prompt text or task id for the selected task command.")
+    task.add_argument("--reason", default="Cancelled by operator.", help="Cancellation reason.")
+    task.add_argument("--limit", type=int, default=20)
 
     automations = sub.add_parser("automations", help="Manage durable gated automation schedule records.")
     automations.add_argument("automation_command", nargs="?", default="list", choices=["list", "create", "show", "trigger", "run", "due", "missed", "replay-missed", "replay", "tick", "run-due", "worker", "daemon", "logs", "worker-log", "service", "service-status", "status", "pause", "resume", "delete"], help="Automation command to run.")
@@ -517,8 +528,13 @@ def main(argv: list[str] | None = None) -> int:
             )
             print(json.dumps(result, indent=2))
             return 0 if result["status"] == "ok" else 1
-        if args.index:
+        if args.index or args.memory_command == "index":
             print(json.dumps({"indexed": store.index_curated_files()}, indent=2))
+        elif args.memory_command == "search":
+            query = " ".join(args.memory_args).strip() or args.query
+            if not query:
+                parser.error("memory search requires a query")
+            print(json.dumps(store.search(query, limit=args.limit), indent=2))
         else:
             query = args.query or "AegisAgent"
             print(json.dumps(store.search(query, limit=args.limit), indent=2))
@@ -640,7 +656,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"audit receipt: {result.receipt_id}")
         return 0
 
-    if args.command == "model":
+    if args.command in {"model", "models"}:
         providers = ProviderStore(paths)
         if args.model_command == "providers":
             print(json.dumps(providers.summary(), indent=2))
@@ -648,6 +664,16 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps(providers.doctor(), indent=2))
         elif args.model_command == "usage":
             print(json.dumps(ProviderUsageStore(paths).summary(limit=args.limit), indent=2))
+        elif args.model_command == "auth":
+            auth_command = args.name or "status"
+            if auth_command in {"status", "methods"}:
+                print(json.dumps(providers.auth_status(), indent=2))
+            elif auth_command == "doctor":
+                print(json.dumps(providers.doctor(), indent=2))
+            elif auth_command in {"login", "logout"}:
+                parser.error(f"{args.command} auth {auth_command} is not supported; use status, methods, or doctor")
+            else:
+                parser.error(f"{args.command} auth requires status, methods, or doctor")
         elif args.model_command == "configure":
             if not args.name:
                 parser.error("model configure requires a provider name")
@@ -761,6 +787,60 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps({"recovered": [record.to_dict() for record in runner.recover_stale_running()]}, indent=2))
         else:
             print(json.dumps({"tasks": runner.list(limit=args.limit)}, indent=2))
+        return 0
+
+    if args.command == "task":
+        runner = TaskRunner(paths)
+        task_command = args.task_command
+        task_text = " ".join(args.task_args).strip()
+        task_id = args.task_args[0] if args.task_args else ""
+        if task_command == "list":
+            print(json.dumps({"tasks": runner.list(limit=args.limit)}, indent=2))
+        elif task_command == "submit":
+            if not task_text:
+                parser.error("task submit requires a prompt")
+            print(json.dumps(runner.submit(task_text, source="cli").to_dict(), indent=2))
+        elif task_command in {"bg", "background"}:
+            if not task_text:
+                parser.error(f"task {task_command} requires a prompt")
+            print(json.dumps(runner.submit_background(task_text, source="cli").to_dict(), indent=2))
+        elif task_command == "start":
+            if not task_id:
+                parser.error("task start requires a task id")
+            print(json.dumps(runner.start_background(task_id).to_dict(), indent=2))
+        elif task_command == "run":
+            if not task_id:
+                parser.error("task run requires a task id")
+            print(json.dumps(runner.run(task_id).to_dict(), indent=2))
+        elif task_command in {"show", "status"}:
+            if not task_id:
+                parser.error(f"task {task_command} requires a task id")
+            print(json.dumps(runner.get(task_id).to_dict(), indent=2))
+        elif task_command in {"events", "timeline"}:
+            if not task_id:
+                parser.error(f"task {task_command} requires a task id")
+            print(json.dumps({"task_id": task_id, "events": [event.to_dict() for event in runner.events(task_id)]}, indent=2))
+        elif task_command in {"output", "outputs"}:
+            if not task_id:
+                parser.error(f"task {task_command} requires a task id")
+            if args.json:
+                print(json.dumps({"task_id": task_id, "outputs": [output.to_dict() for output in runner.outputs(task_id)]}, indent=2))
+            else:
+                print(format_task_outputs(runner.outputs(task_id)))
+        elif task_command in {"log", "logs"}:
+            if not task_id:
+                parser.error(f"task {task_command} requires a task id")
+            logs = runner.worker_logs(task_id)
+            if args.json:
+                print(json.dumps(logs, indent=2))
+            else:
+                print(format_task_worker_logs(logs))
+        elif task_command == "cancel":
+            if not task_id:
+                parser.error("task cancel requires a task id")
+            print(json.dumps(runner.cancel(task_id, reason=args.reason).to_dict(), indent=2))
+        elif task_command in {"recover", "recover-stale"}:
+            print(json.dumps({"recovered": [record.to_dict() for record in runner.recover_stale_running()]}, indent=2))
         return 0
 
     if args.command == "automations":

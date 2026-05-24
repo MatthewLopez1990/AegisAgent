@@ -464,9 +464,9 @@ class CliTests(unittest.TestCase):
 
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertIn(marker, result.stdout)
-                for token in ("init", "setup", "commands", "tui", "web", "tasks", "agents", "completion"):
+                for token in ("init", "setup", "commands", "tui", "web", "tasks", "task", "model", "models", "agents", "completion"):
                     self.assertIn(token, result.stdout)
-                for token in ("model-auth", "connections", "skills", "plugins", "check", "checks", "verify", "doctor", "init", "first-task", "--init"):
+                for token in ("model-auth", "connections", "skills", "plugins", "check", "checks", "verify", "doctor", "init", "first-task", "--init", "submit", "status", "recover-stale", "auth", "search", "index"):
                     self.assertIn(token, result.stdout)
                 self.assertIn("--workspace", result.stdout)
                 self.assertNotIn("OPENAI_API_KEY=", result.stdout)
@@ -507,6 +507,9 @@ class CliTests(unittest.TestCase):
         build_commands = [row["command"] for row in payload["groups"][0]["commands"]]
         self.assertIn("/git status", build_commands)
         self.assertIn("/agents delegate <task>", build_commands)
+        self.assertIn("aliases", payload)
+        self.assertTrue(any(alias["alias"] == "/task" and alias["command"] == "/tasks" for alias in payload["aliases"]))
+        self.assertTrue(any(alias["alias"] == "/model" and alias["command"] == "/model providers" for alias in payload["aliases"]))
 
     def test_web_command_is_preview_only_until_serve_is_approved(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1170,6 +1173,24 @@ class CliTests(unittest.TestCase):
             self.assertIn('"browser_auto_launch": false', audit)
             self.assertNotIn(raw_secret, audit)
 
+    def test_memory_search_and_index_subcommand_aliases_are_read_only(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            applied = run_cli("memory", "--kind", "user", "--title", "Terminal preference", "--add", "Prefers terminal-first activation.", "--approved", cwd=tmp)
+            self.assertEqual(applied.returncode, 0, applied.stderr)
+
+            searched = run_cli("memory", "search", "terminal-first", cwd=tmp)
+            self.assertEqual(searched.returncode, 0, searched.stderr)
+            search_payload = json.loads(searched.stdout)
+            self.assertTrue(search_payload)
+            self.assertIn("Terminal preference", searched.stdout)
+
+            indexed = run_cli("memory", "index", cwd=tmp)
+            self.assertEqual(indexed.returncode, 0, indexed.stderr)
+            self.assertIn("indexed", json.loads(indexed.stdout))
+
+            unsupported = run_cli("memory", "health", cwd=tmp)
+            self.assertEqual(unsupported.returncode, 2)
+
     def test_edit_replace_is_approval_gated_typed_workspace_mutation(self):
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp) / "note.txt"
@@ -1543,6 +1564,42 @@ class CliTests(unittest.TestCase):
             self.assertIn("provider.configured", audit)
             self.assertIn("provider.doctor", audit)
 
+    def test_models_alias_and_auth_readonly_forms_are_metadata_only(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            model_providers = run_cli("model", "providers", cwd=tmp)
+            models_providers = run_cli("models", "providers", cwd=tmp)
+            self.assertEqual(models_providers.returncode, 0, models_providers.stderr)
+            self.assertEqual(json.loads(models_providers.stdout)["active_provider"], json.loads(model_providers.stdout)["active_provider"])
+
+            models_default = run_cli("models", cwd=tmp)
+            self.assertEqual(models_default.returncode, 0, models_default.stderr)
+            self.assertEqual(json.loads(models_default.stdout)["active_provider"], "local/terminal-v0")
+
+            for command in (("model", "auth", "status"), ("model", "auth", "methods"), ("models", "auth", "status"), ("models", "auth", "methods")):
+                result = run_cli(*command, cwd=tmp)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                payload = json.loads(result.stdout)
+                self.assertEqual(payload["title"], "AEGIS MODEL AUTH STATUS")
+                self.assertFalse(payload["browser_auto_launch"])
+                self.assertFalse(payload["external_action_started"])
+                self.assertFalse(payload["model_invocation_performed"])
+                self.assertFalse(payload["raw_secret_values_included"])
+                self.assertIn("login", payload["unsupported"])
+
+            doctor = run_cli("models", "auth", "doctor", cwd=tmp)
+            self.assertEqual(doctor.returncode, 0, doctor.stderr)
+            doctor_payload = json.loads(doctor.stdout)
+            self.assertTrue(next(check for check in doctor_payload["checks"] if check["name"] == "metadata_only")["ok"])
+
+            usage = run_cli("models", "usage", cwd=tmp)
+            self.assertEqual(usage.returncode, 0, usage.stderr)
+            self.assertFalse(json.loads(usage.stdout)["browser_auto_launch"])
+
+            login = run_cli("model", "auth", "login", cwd=tmp)
+            logout = run_cli("models", "auth", "logout", cwd=tmp)
+            self.assertEqual(login.returncode, 2)
+            self.assertEqual(logout.returncode, 2)
+
     def test_connectors_are_metadata_only_and_gated(self):
         with tempfile.TemporaryDirectory() as tmp:
             listing = run_cli("connectors", cwd=tmp)
@@ -1585,6 +1642,64 @@ class CliTests(unittest.TestCase):
             cancelled = run_cli("tasks", "--cancel", cancel_id, cwd=tmp)
             self.assertEqual(cancelled.returncode, 0, cancelled.stderr)
             self.assertEqual(json.loads(cancelled.stdout)["status"], "cancelled")
+
+    def test_task_singular_aliases_match_plural_queue_behavior(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            submitted = run_cli("task", "submit", "draft", "a", "safe", "plan", cwd=tmp)
+            self.assertEqual(submitted.returncode, 0, submitted.stderr)
+            task_id = json.loads(submitted.stdout)["id"]
+
+            listing = run_cli("task", "list", cwd=tmp)
+            self.assertEqual(listing.returncode, 0, listing.stderr)
+            self.assertIn(task_id, listing.stdout)
+
+            run = run_cli("task", "run", task_id, cwd=tmp)
+            self.assertEqual(run.returncode, 0, run.stderr)
+            self.assertEqual(json.loads(run.stdout)["status"], "completed")
+
+            for command in ("status", "show"):
+                shown = run_cli("task", command, task_id, cwd=tmp)
+                self.assertEqual(shown.returncode, 0, shown.stderr)
+                self.assertEqual(json.loads(shown.stdout)["id"], task_id)
+
+            for command in ("events", "timeline"):
+                events = run_cli("task", command, task_id, cwd=tmp)
+                self.assertEqual(events.returncode, 0, events.stderr)
+                event_names = [event["event"] for event in json.loads(events.stdout)["events"]]
+                self.assertIn("completed", event_names)
+
+            output = run_cli("task", "output", task_id, cwd=tmp)
+            self.assertEqual(output.returncode, 0, output.stderr)
+            self.assertIn("AEGIS TASK OUTPUT", output.stdout)
+
+            cancel_candidate = run_cli("task", "submit", "cancel me", cwd=tmp)
+            cancel_id = json.loads(cancel_candidate.stdout)["id"]
+            cancelled = run_cli("task", "cancel", cancel_id, "--reason", "not needed", cwd=tmp)
+            self.assertEqual(cancelled.returncode, 0, cancelled.stderr)
+            self.assertEqual(json.loads(cancelled.stdout)["status"], "cancelled")
+
+            for unsupported in ("resume", "pause", "evidence"):
+                rejected = run_cli("task", unsupported, cwd=tmp)
+                self.assertEqual(rejected.returncode, 2)
+
+    def test_task_singular_background_log_and_recovery_aliases(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            background = run_cli("task", "bg", "background", "safe", "plan", cwd=tmp, extra_env={"AEGISAGENT_TASK_NO_SPAWN": "1"})
+            self.assertEqual(background.returncode, 0, background.stderr)
+            task_id = json.loads(background.stdout)["id"]
+            self.assertEqual(json.loads(background.stdout)["status"], "queued")
+
+            logs = run_cli("task", "logs", task_id, cwd=tmp)
+            self.assertEqual(logs.returncode, 0, logs.stderr)
+            self.assertIn("AEGIS TASK WORKER LOGS", logs.stdout)
+
+            background_long = run_cli("task", "background", "another", "safe", "plan", cwd=tmp, extra_env={"AEGISAGENT_TASK_NO_SPAWN": "1"})
+            self.assertEqual(background_long.returncode, 0, background_long.stderr)
+
+            for command in ("recover", "recover-stale"):
+                recovered = run_cli("task", command, cwd=tmp)
+                self.assertEqual(recovered.returncode, 0, recovered.stderr)
+                self.assertIn("recovered", json.loads(recovered.stdout))
 
     def test_tasks_background_can_be_run_deterministically(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -140,6 +140,7 @@ SLASH_COMMANDS: tuple[tuple[str, str], ...] = (
     ("/tasks unwatch", "stop the active nonblocking task monitor"),
     ("/tasks recover", "mark stale detached running tasks failed"),
     ("/tasks cancel", "cancel a queued governed task"),
+    ("/task", "exact root alias for /tasks"),
     ("/automations", "list durable gated automation records"),
     ("/automations create", "create a gated automation record with name | schedule | prompt"),
     ("/automations due", "check which automation schedules are due"),
@@ -171,9 +172,15 @@ SLASH_COMMANDS: tuple[tuple[str, str], ...] = (
     ("/model providers", "show configured local model provider routes"),
     ("/model doctor", "run metadata-only model route checks"),
     ("/model usage", "show terminal model invocation usage ledger"),
+    ("/model auth status", "show read-only model auth status"),
+    ("/model auth methods", "show read-only model auth methods"),
+    ("/model auth doctor", "run metadata-only model auth checks"),
+    ("/models providers", "alias for model provider routes"),
     ("/connectors", "show connector readiness metadata"),
     ("/connectors doctor", "run metadata-only connector checks"),
     ("/memory", "index and search local memory"),
+    ("/memory search", "search local memory by query"),
+    ("/memory index", "index curated memory files"),
     ("/memory list", "list curated memory entries"),
     ("/memory show", "show one curated memory entry"),
     ("/memory delete", "delete one curated memory entry after approval"),
@@ -222,6 +229,13 @@ SLASH_COMMANDS: tuple[tuple[str, str], ...] = (
 )
 
 
+COMMAND_ROOT_SHORTCUTS: tuple[tuple[str, str, str], ...] = (
+    ("/task", "/tasks", "exact root alias for task queue overview"),
+    ("/model", "/model providers", "exact root alias for provider route readiness"),
+    ("/memory", "/memory", "canonical memory index/search root"),
+)
+
+
 COMMAND_MENU_GROUPS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
     (
         "Operate",
@@ -243,6 +257,7 @@ COMMAND_MENU_GROUPS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
             ("/tasks unwatch", "stop active task monitor"),
             ("/tasks recover", "recover stale detached running tasks"),
             ("/tasks cancel <id>", "cancel queued governed work"),
+            ("/task", "exact root alias for /tasks"),
             ("/automations", "list gated schedule records"),
             ("/automations create <name> | <schedule> | <prompt>", "persist a schedule record"),
             ("/automations due", "check due schedules without queueing work"),
@@ -311,9 +326,15 @@ COMMAND_MENU_GROUPS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
             ("/model providers", "show provider route readiness"),
             ("/model doctor", "run provider route readiness checks"),
             ("/model usage", "show local/external model usage ledger"),
+            ("/model auth status", "show read-only model auth status"),
+            ("/model auth methods", "show read-only model auth methods"),
+            ("/model auth doctor", "run metadata-only model auth checks"),
+            ("/models providers", "alias for provider route readiness"),
             ("/connectors", "show connector readiness metadata"),
             ("/connectors doctor", "run metadata-only connector checks"),
             ("/memory", "index and search local memory"),
+            ("/memory search <query>", "search local memory by query"),
+            ("/memory index", "index curated memory files"),
             ("/memory list", "review curated memory entries"),
             ("/memory show <entry-id>", "inspect redacted curated memory"),
             ("/memory delete <entry-id> | approve", "approval-gated curated memory delete"),
@@ -921,7 +942,7 @@ class _CursesAegisAgent:
             self.message = "No slash command matches."
             return
         command = palette[min(self.palette_index, len(palette) - 1)][0]
-        self.input_buffer = command + (" " if command in {"/policy shell", "/read", "/git diff", "/git stage", "/git commit", "/git branch", "/git remote", "/edit replace", "/test", "/verify", "/sessions search", "/submit", "/add-dir", "/memory add", "/memory show", "/memory delete", "/web fetch", "/browser open", "/browser screenshot", "/tasks submit", "/tasks bg", "/tasks run", "/tasks start", "/tasks events", "/tasks output", "/tasks logs", "/tasks watch", "/tasks cancel", "/automations create", "/automations trigger", "/automations pause", "/automations resume", "/automations delete", "/improve propose", "/improve approve", "/improve implement", "/improve handoff", "/improve candidate", "/improve diff", "/improve verify", "/improve apply", "/improve evidence", "/improve complete", "/improve reject", "/subagents bg", "/subagents live", "/subagents monitor", "/subagents cancel", "/agents delegate", "/agents bg", "/agents live", "/agents monitor", "/agents cancel", "/q"} else "")
+        self.input_buffer = command + (" " if command in {"/policy shell", "/read", "/git diff", "/git stage", "/git commit", "/git branch", "/git remote", "/edit replace", "/test", "/verify", "/sessions search", "/submit", "/add-dir", "/memory add", "/memory search", "/memory show", "/memory delete", "/web fetch", "/browser open", "/browser screenshot", "/tasks submit", "/tasks bg", "/tasks run", "/tasks start", "/tasks events", "/tasks output", "/tasks logs", "/tasks watch", "/tasks cancel", "/automations create", "/automations trigger", "/automations pause", "/automations resume", "/automations delete", "/improve propose", "/improve approve", "/improve implement", "/improve handoff", "/improve candidate", "/improve diff", "/improve verify", "/improve apply", "/improve evidence", "/improve complete", "/improve reject", "/subagents bg", "/subagents live", "/subagents monitor", "/subagents cancel", "/agents delegate", "/agents bg", "/agents live", "/agents monitor", "/agents cancel", "/q"} else "")
         self.cursor = len(self.input_buffer)
         self.message = f"Completed {command}; add args or press Enter."
 
@@ -992,6 +1013,9 @@ class _CursesAegisAgent:
 
 def dispatch_interactive_command(command: str, paths: RuntimePaths) -> str:
     audit = AuditLog(paths)
+    normalized = normalize_interactive_command(command)
+    if normalized != command:
+        command = normalized
     if command in {"/help", "help", "?"}:
         print("AegisAgent TUI controls")
         print("- Enter sends the prompt, dispatches the selected slash command, or confirms the focused item.")
@@ -1154,6 +1178,28 @@ def dispatch_interactive_command(command: str, paths: RuntimePaths) -> str:
         SessionStore(paths).append("main", "tool", f"Context directory added: {rel}", metadata={"source": "tui", "tool": "session.add_dir", "path": rel, "receipt_id": receipt["id"]})
         print_json({"path": rel, "status": "ok", "receipt": receipt["id"]})
         return "add-dir"
+    if command in {"/model auth status", "/model auth methods", "/models auth status", "/models auth methods"} or command.startswith("/model auth status") or command.startswith("/model auth methods") or command.startswith("/models auth status") or command.startswith("/models auth methods"):
+        print_json(ProviderStore(paths).auth_status())
+        return "models"
+    if command in {"/model auth doctor", "/models auth doctor"} or command.startswith("/model auth doctor") or command.startswith("/models auth doctor"):
+        print_json(ProviderStore(paths).doctor())
+        return "models"
+    if command.startswith("/model auth login") or command.startswith("/model auth logout") or command.startswith("/models auth login") or command.startswith("/models auth logout"):
+        print_json(
+            {
+                "status": "unsupported",
+                "reason": "model auth login/logout are not implemented in AegisAgent terminal mode; use /model auth status, /model auth methods, or /model auth doctor.",
+                "browser_auto_launch": False,
+                "gateway_started": False,
+                "external_action_started": False,
+                "model_invocation_performed": False,
+                "raw_secret_values_included": False,
+            }
+        )
+        return "models"
+    if command.startswith("/model auth") or command.startswith("/models auth"):
+        print("Usage: /model auth status | /model auth methods | /model auth doctor")
+        return "models"
     if command in {"/model doctor", "/models doctor", "/provider doctor"} or command.startswith("/model doctor") or command.startswith("/models doctor"):
         print_json(ProviderStore(paths).doctor())
         return "models"
@@ -1245,6 +1291,16 @@ def dispatch_interactive_command(command: str, paths: RuntimePaths) -> str:
     if command.startswith("/audit"):
         print_json(audit.verify())
         return "audit"
+    if _slash_invoked(command, "/memory search"):
+        query = _slash_remainder(command, "/memory search")
+        if not query:
+            print("Usage: /memory search <query>")
+        else:
+            print_json(MemoryStore(paths).search(query, limit=20))
+        return "memory"
+    if _slash_invoked(command, "/memory index"):
+        print_json({"indexed": MemoryStore(paths).index_curated_files()})
+        return "memory"
     if command.startswith("/memory add"):
         raw = command.removeprefix("/memory add").strip()
         parts = [part.strip() for part in raw.split("|", 3)]
@@ -1882,6 +1938,12 @@ def normalize_interactive_command(command: str) -> str:
     }
     if stripped in setup_aliases:
         return setup_aliases[stripped]
+    root_aliases = {
+        "/task": "/tasks",
+        "/model": "/model providers",
+    }
+    if stripped in root_aliases:
+        return root_aliases[stripped]
     return stripped
 
 
@@ -2006,6 +2068,11 @@ def _wrap_lines(lines: list[str], width: int) -> list[str]:
 def command_catalog_payload(paths: RuntimePaths, *, prefix: str = "", group: str = "") -> dict[str, Any]:
     needle = prefix.lower().strip().lstrip("/")
     group_filter = group.lower().strip()
+    aliases = [
+        {"alias": alias, "command": command, "detail": detail, "terminal_first": True, "browser_auto_launch": False}
+        for alias, command, detail in COMMAND_ROOT_SHORTCUTS
+        if not needle or needle in alias.lower().lstrip("/") or needle in command.lower().lstrip("/") or needle in detail.lower()
+    ]
     groups: list[dict[str, Any]] = []
     command_count = 0
     matched_count = 0
@@ -2042,6 +2109,7 @@ def command_catalog_payload(paths: RuntimePaths, *, prefix: str = "", group: str
         "external_action_started": False,
         "plain_text_submits_task": True,
         "tab_completion": True,
+        "aliases": aliases,
         "groups": groups,
         "counts": {"groups": len(groups), "commands": command_count, "matched": matched_count},
         "examples": ["aegis commands setup", "aegis commands --group Build", "/commands agents", "/commands json"],
@@ -2059,6 +2127,12 @@ def render_command_lanes(payload: dict[str, Any]) -> str:
         "",
     ]
     matched = False
+    if payload.get("aliases"):
+        matched = True
+        lines.append("[Root Shortcuts]")
+        for alias in payload["aliases"]:
+            lines.append(f"  {alias['alias']:<12} -> {alias['command']:<18} {alias['detail']}")
+        lines.append("")
     for group in payload["groups"]:
         matched = True
         lines.append(f"[{group['name']}]")

@@ -118,6 +118,57 @@ class ProviderStore:
             "next": f"Use `{command} model configure <name> --mode api_key --api-key-env OPENAI_API_KEY` or keep `local/terminal-v0` active.",
         }
 
+    def auth_status(self) -> dict[str, Any]:
+        route = self.route(self.active_provider())
+        command = terminal_command_name()
+        methods = [
+            {
+                "name": "local",
+                "label": "Local terminal provider",
+                "status": "ready" if route.mode == "local" else "available",
+                "browser_required": False,
+                "external_action_started": False,
+                "model_invocation_performed": False,
+                "command": f"{command} model configure local/terminal-v0 --mode local",
+            },
+            {
+                "name": "api_key_env",
+                "label": "API key environment handle",
+                "status": "ready" if route.mode == "api_key" and route.api_key_env and os.environ.get(route.api_key_env) else "needs_env",
+                "env_handle": route.api_key_env if route.mode == "api_key" else "",
+                "env_present": bool(route.mode == "api_key" and route.api_key_env and os.environ.get(route.api_key_env)),
+                "browser_required": False,
+                "external_action_started": False,
+                "model_invocation_performed": False,
+                "command": f"{command} model configure openai/gpt-5.5 --mode api_key --api-key-env OPENAI_API_KEY",
+            },
+            {
+                "name": "subscription_cli",
+                "label": "Local subscription CLI bridge",
+                "status": "metadata_ready" if route.mode == "subscription_cli" else "available",
+                "browser_required": False,
+                "external_action_started": False,
+                "model_invocation_performed": False,
+                "command": f"{command} model configure openai/gpt-5.5 --mode subscription_cli",
+            },
+        ]
+        return {
+            "title": "AEGIS MODEL AUTH STATUS",
+            "active_provider": route.name,
+            "mode": route.mode,
+            "route": route.to_dict(),
+            "methods": methods,
+            "terminal_first": True,
+            "browser_required": False,
+            "browser_auto_launch": False,
+            "gateway_started": False,
+            "external_action_started": False,
+            "model_invocation_performed": False,
+            "raw_secret_values_included": False,
+            "unsupported": ["login", "logout"],
+            "next": f"Use `{command} model doctor` for metadata-only route checks.",
+        }
+
     def doctor(self) -> dict[str, Any]:
         route = self.route(self.active_provider())
         checks = [

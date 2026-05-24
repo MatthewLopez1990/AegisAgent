@@ -238,6 +238,8 @@ class TuiRendererTests(unittest.TestCase):
         command_matches = slash_palette_candidates("/com")
         self.assertTrue(any(command == "/commands" for command, _detail in command_matches))
         memory_matches = slash_palette_candidates("/memory")
+        self.assertTrue(any(command == "/memory search" for command, _detail in memory_matches))
+        self.assertTrue(any(command == "/memory index" for command, _detail in memory_matches))
         self.assertTrue(any(command == "/memory list" for command, _detail in memory_matches))
         self.assertTrue(any(command == "/memory show" for command, _detail in memory_matches))
         self.assertTrue(any(command == "/memory delete" for command, _detail in memory_matches))
@@ -253,6 +255,8 @@ class TuiRendererTests(unittest.TestCase):
         self.assertTrue(any(command == "/gaps" for command, _detail in gap_matches))
         task_matches = slash_palette_candidates("/tasks wa")
         self.assertTrue(any(command == "/tasks watch" for command, _detail in task_matches))
+        task_alias_matches = slash_palette_candidates("/task", limit=20)
+        self.assertTrue(any(command == "/task" for command, _detail in task_alias_matches))
         automation_matches = slash_palette_candidates("/auto")
         self.assertTrue(any(command == "/automations" for command, _detail in automation_matches))
         automation_create_matches = slash_palette_candidates("/automations c")
@@ -329,6 +333,10 @@ class TuiRendererTests(unittest.TestCase):
         self.assertTrue(any(command == "/model doctor" for command, _detail in model_doctor_matches))
         model_usage_matches = slash_palette_candidates("/model u")
         self.assertTrue(any(command == "/model usage" for command, _detail in model_usage_matches))
+        model_auth_matches = slash_palette_candidates("/model auth")
+        self.assertTrue(any(command == "/model auth status" for command, _detail in model_auth_matches))
+        self.assertTrue(any(command == "/model auth methods" for command, _detail in model_auth_matches))
+        self.assertTrue(any(command == "/model auth doctor" for command, _detail in model_auth_matches))
         self.assertEqual(normalize_interactive_command("/setup check"), "/setup run-checks")
         self.assertEqual(normalize_interactive_command("/setup checks"), "/setup run-checks")
         self.assertEqual(normalize_interactive_command("/setup verify"), "/setup run-checks")
@@ -338,7 +346,12 @@ class TuiRendererTests(unittest.TestCase):
         self.assertEqual(normalize_interactive_command("/setup skills"), "/setup memory")
         self.assertEqual(normalize_interactive_command("/setup plugins"), "/setup memory")
         self.assertEqual(normalize_interactive_command("/setup init"), "/setup")
+        self.assertEqual(normalize_interactive_command("/task"), "/tasks")
+        self.assertEqual(normalize_interactive_command("/model"), "/model providers")
+        self.assertEqual(normalize_interactive_command("/task watch"), "/task watch")
         advertised_commands = {command for command, _detail in SLASH_COMMANDS}
+        self.assertNotIn("/model auth login", advertised_commands)
+        self.assertNotIn("/model auth logout", advertised_commands)
         self.assertNotIn("/setup 1", advertised_commands)
         self.assertNotIn("/setup backends", advertised_commands)
         self.assertNotIn("/setup remote-control", advertised_commands)
@@ -395,6 +408,16 @@ class TuiRendererTests(unittest.TestCase):
             self.assertTrue(payload["terminal_first"])
             self.assertFalse(payload["browser_auto_launch"])
             self.assertTrue(payload["groups"])
+            self.assertTrue(any(alias["alias"] == "/task" and alias["command"] == "/tasks" for alias in payload["aliases"]))
+            self.assertTrue(any(alias["alias"] == "/model" and alias["command"] == "/model providers" for alias in payload["aliases"]))
+
+            alias_output = io.StringIO()
+            with contextlib.redirect_stdout(alias_output):
+                result = dispatch_interactive_command("/commands task", paths)
+
+            self.assertEqual(result, "commands")
+            self.assertIn("/task", alias_output.getvalue())
+            self.assertIn("exact root alias for task queue overview", alias_output.getvalue())
 
     def test_live_tui_question_mark_opens_help_without_prompt_text(self):
         class FakeCurses:
@@ -479,6 +502,38 @@ class TuiRendererTests(unittest.TestCase):
             self.assertIn("local/terminal-v0", output.getvalue())
             self.assertIn('"browser_required": false', output.getvalue())
             self.assertIn('"external_action_started": false', output.getvalue())
+
+            auth_status = io.StringIO()
+            with contextlib.redirect_stdout(auth_status):
+                result = dispatch_interactive_command("/model auth status", paths)
+
+            self.assertEqual(result, "models")
+            self.assertIn("AEGIS MODEL AUTH STATUS", auth_status.getvalue())
+            self.assertIn('"browser_auto_launch": false', auth_status.getvalue())
+            self.assertIn('"model_invocation_performed": false', auth_status.getvalue())
+
+            auth_methods = io.StringIO()
+            with contextlib.redirect_stdout(auth_methods):
+                result = dispatch_interactive_command("/models auth methods", paths)
+
+            self.assertEqual(result, "models")
+            self.assertIn('"methods"', auth_methods.getvalue())
+            self.assertIn('"raw_secret_values_included": false', auth_methods.getvalue())
+
+            auth_doctor = io.StringIO()
+            with contextlib.redirect_stdout(auth_doctor):
+                result = dispatch_interactive_command("/model auth doctor", paths)
+
+            self.assertEqual(result, "models")
+            self.assertIn('"metadata_only"', auth_doctor.getvalue())
+
+            auth_login = io.StringIO()
+            with contextlib.redirect_stdout(auth_login):
+                result = dispatch_interactive_command("/model auth login openai", paths)
+
+            self.assertEqual(result, "models")
+            self.assertIn('"status": "unsupported"', auth_login.getvalue())
+            self.assertIn('"external_action_started": false', auth_login.getvalue())
 
             setup_model = io.StringIO()
             with contextlib.redirect_stdout(setup_model):
@@ -811,6 +866,34 @@ class TuiRendererTests(unittest.TestCase):
             self.assertIn('"memory_write_performed": true', audit)
             self.assertIn('"browser_auto_launch": false', audit)
             self.assertNotIn(raw_secret, audit)
+
+    def test_interactive_dispatch_memory_search_and_index_are_read_only(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = runtime_paths(tmp)
+            with contextlib.redirect_stdout(io.StringIO()):
+                result = dispatch_interactive_command("/memory add user | Terminal preference | Prefers terminal-first activation. | approve", paths)
+            self.assertEqual(result, "memory")
+
+            searched = io.StringIO()
+            with contextlib.redirect_stdout(searched):
+                result = dispatch_interactive_command("/memory search terminal-first", paths)
+
+            self.assertEqual(result, "memory")
+            self.assertIn("Terminal preference", searched.getvalue())
+
+            usage = io.StringIO()
+            with contextlib.redirect_stdout(usage):
+                result = dispatch_interactive_command("/memory search", paths)
+
+            self.assertEqual(result, "memory")
+            self.assertIn("Usage: /memory search <query>", usage.getvalue())
+
+            indexed = io.StringIO()
+            with contextlib.redirect_stdout(indexed):
+                result = dispatch_interactive_command("/memory index", paths)
+
+            self.assertEqual(result, "memory")
+            self.assertIn('"indexed"', indexed.getvalue())
 
     def test_interactive_dispatch_skills_reports_trust_summary(self):
         with tempfile.TemporaryDirectory() as tmp:
