@@ -259,14 +259,21 @@ class SetupGuide:
                 ),
             )
         if name == "memory":
-            skills = SkillLoader([self.paths.skills_dir]).discover()
+            skill_summary = SkillLoader([self.paths.skills_dir]).trust_summary()
+            skill_counts = skill_summary["counts"]
             command = terminal_command_name()
             return SetupSection(
                 "memory",
                 "local",
                 "Workspace memory and skill discovery stay local unless a future connector is explicitly configured.",
                 (f"{command} memory --index", f"{command} skills", "/memory", "/skills"),
-                ({"name": "skills_found", "count": len(skills)},),
+                (
+                    {"name": "skills_found", "count": skill_counts["total"]},
+                    {"name": "skills_trusted", "count": skill_counts["trusted"]},
+                    {"name": "skills_review", "count": skill_counts["review"]},
+                    {"name": "skills_quarantined", "count": skill_counts["quarantined"]},
+                    {"name": "skill_trust_metadata", "ok": True, "execution_performed": skill_summary["execution_performed"]},
+                ),
             )
         raise KeyError(f"unknown setup section: {name}")
 

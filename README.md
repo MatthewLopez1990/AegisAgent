@@ -155,6 +155,7 @@ PYTHONPATH=src python3 -m aegisagent install shim --approved --bin-dir "$HOME/.l
 | `aegis capabilities --gaps` | Show remaining product gaps. |
 | `aegis memory list` | List curated memory entries. |
 | `aegis memory show <entry-id>` | Inspect one redacted curated memory entry. |
+| `aegis skills` | Show passive SKILL.md trust metadata and quarantine findings. |
 | `aegis activation` | Show terminal startup and browser-off safety details. |
 | `aegis update --approved` | Pull the latest GitHub `main` into the installed checkout. |
 | `aegis completion zsh` | Print shell completion. Also supports `bash` and `fish`. |
@@ -194,6 +195,7 @@ aegis completion fish > ~/.config/fish/completions/aegis.fish
 /memory list
 /memory show <entry-id>
 /memory delete <entry-id> | approve
+/skills
 /git status
 /git diff [path]
 /test
@@ -222,6 +224,7 @@ AegisAgent fails closed for destructive commands and secret echo.
 - Setup and config commands may write Aegis metadata, but secrets are stored as environment-variable handles only.
 - Raw secret values must not be written to Aegis config, connector metadata, examples, prompts, task text, or audit notes.
 - Audit payloads are redacted before persistence, and `aegis audit verify` checks the chained receipt hash.
+- `aegis skills` and `/skills` are discovery-only. They read local `SKILL.md` files as text, redact derived metadata, hash the scanned content, and report `trusted`, `review`, or `quarantined` posture without executing skills, installing packages, invoking models, opening browsers, or sending network requests.
 
 Configure secret handles like this:
 

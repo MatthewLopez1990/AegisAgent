@@ -36,6 +36,15 @@ class PolicyTests(unittest.TestCase):
             self.assertFalse(classification.requires_approval, command)
             self.assertEqual(classification.risk, "low")
 
+    def test_skill_discovery_is_passive_but_execution_is_gated(self):
+        discover = decide_tool("skills", "trust_summary")
+        execute = decide_tool("skills", "execute danger")
+
+        self.assertEqual(discover.action, "allow")
+        self.assertEqual(discover.risk, "low")
+        self.assertEqual(execute.action, "ask")
+        self.assertEqual(execute.risk, "high")
+
 
 if __name__ == "__main__":
     unittest.main()

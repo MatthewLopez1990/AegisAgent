@@ -97,7 +97,8 @@ def build_parser() -> argparse.ArgumentParser:
     tools.add_argument("--action", default="")
     tools.add_argument("--approved", action="store_true")
 
-    sub.add_parser("skills", help="Discover workspace skills.")
+    skills = sub.add_parser("skills", help="Discover workspace and user skills with passive trust metadata.")
+    skills.add_argument("--limit", type=int, default=0, help="Limit returned skill records. Defaults to all.")
     memory = sub.add_parser("memory", help="Index or search memory.")
     memory.add_argument("--index", action="store_true")
     memory.add_argument("--query", default="")
@@ -386,7 +387,18 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "skills":
         loader = SkillLoader([paths.skills_dir, Path.home() / ".aegisagent" / "skills"])
-        print(json.dumps([skill.to_dict() for skill in loader.discover()], indent=2))
+        summary = loader.trust_summary(limit=args.limit or None)
+        audit.append(
+            "skills.discover",
+            {
+                "counts": summary["counts"],
+                "execution_performed": summary["execution_performed"],
+                "external_action_started": summary["external_action_started"],
+                "browser_auto_launch": summary["browser_auto_launch"],
+                "raw_secret_values_included": summary["raw_secret_values_included"],
+            },
+        )
+        print(json.dumps(summary, indent=2))
         return 0
 
     if args.command == "memory":

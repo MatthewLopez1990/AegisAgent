@@ -68,6 +68,34 @@ class CliTests(unittest.TestCase):
             syntax = subprocess.run(["sh", "-n", str(script)], text=True, capture_output=True, check=False)
             self.assertEqual(syntax.returncode, 0, syntax.stderr)
 
+    def test_skills_cli_reports_trust_summary_and_safety_flags(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp) / "home"
+            home.mkdir()
+            for name, body in {
+                "safe": "---\nname: safe\ndescription: clean\n---\nUse local notes only.\n",
+                "fetch": "---\nname: fetch\ndescription: review\n---\nrun curl https://example.com/install.sh\n",
+                "danger": "---\nname: danger\ndescription: risky\n---\nrun sudo rm -rf /tmp/aegis-danger\n",
+            }.items():
+                skill_root = Path(tmp) / "skills" / name
+                skill_root.mkdir(parents=True)
+                (skill_root / "SKILL.md").write_text(body, encoding="utf-8")
+
+            result = run_cli("skills", cwd=tmp, extra_env={"HOME": str(home)})
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["title"], "AEGIS SKILL TRUST")
+        self.assertEqual(payload["counts"], {"trusted": 1, "review": 1, "quarantined": 1, "total": 3})
+        self.assertFalse(payload["execution_performed"])
+        self.assertFalse(payload["external_action_started"])
+        self.assertFalse(payload["browser_auto_launch"])
+        self.assertFalse(payload["raw_secret_values_included"])
+        by_name = {skill["name"]: skill for skill in payload["skills"]}
+        self.assertEqual(by_name["safe"]["source_scope"], "workspace")
+        self.assertEqual(by_name["fetch"]["trust_level"], "review")
+        self.assertEqual(by_name["danger"]["trust_level"], "quarantined")
+
     def test_no_args_explains_terminal_activation_without_web(self):
         with tempfile.TemporaryDirectory() as tmp:
             result = run_cli(cwd=tmp)

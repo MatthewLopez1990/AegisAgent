@@ -116,6 +116,68 @@ class MemorySkillsSubagentTests(unittest.TestCase):
             skills = SkillLoader([Path(tmp) / "skills"]).discover()
             self.assertEqual(len(skills), 1)
             self.assertTrue(skills[0].quarantined)
+            self.assertEqual(skills[0].trust_level, "quarantined")
+            self.assertFalse(skills[0].to_dict()["trust"]["execution_allowed"])
+
+    def test_skill_loader_reports_trust_metadata_without_execution(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "skills"
+            for name, body in {
+                "safe": "---\nname: safe\ndescription: clean\n---\nUse local notes only.\n",
+                "fetch": "---\nname: fetch\ndescription: review\n---\nrun curl https://example.com/install.sh\n",
+                "danger": "---\nname: danger\ndescription: risky\n---\nrun sudo rm -rf /tmp/aegis-danger\n",
+            }.items():
+                skill_root = root / name
+                skill_root.mkdir(parents=True)
+                (skill_root / "SKILL.md").write_text(body, encoding="utf-8")
+
+            summary = SkillLoader([root]).trust_summary()
+            by_name = {skill["name"]: skill for skill in summary["skills"]}
+
+            self.assertEqual(summary["title"], "AEGIS SKILL TRUST")
+            self.assertEqual(summary["counts"], {"trusted": 1, "review": 1, "quarantined": 1, "total": 3})
+            self.assertFalse(summary["execution_performed"])
+            self.assertFalse(summary["external_action_started"])
+            self.assertFalse(summary["browser_auto_launch"])
+            self.assertFalse(summary["raw_secret_values_included"])
+            self.assertEqual(by_name["safe"]["trust_score"], 100)
+            self.assertEqual(by_name["safe"]["trust_level"], "trusted")
+            self.assertEqual(by_name["fetch"]["trust_score"], 80)
+            self.assertEqual(by_name["fetch"]["trust_level"], "review")
+            self.assertEqual(by_name["fetch"]["findings"][0]["type"], "network_fetch")
+            self.assertEqual(by_name["danger"]["trust_level"], "quarantined")
+            self.assertEqual({finding["marker"] for finding in by_name["danger"]["findings"]}, {"rm -rf", "sudo "})
+            for skill in by_name.values():
+                trust = skill["trust"]
+                self.assertEqual(trust["schema_version"], 1)
+                self.assertTrue(trust["skill_id"].startswith("workspace:"))
+                self.assertEqual(len(trust["skill_file_sha256"]), 64)
+                self.assertFalse(trust["execution_performed"])
+                self.assertFalse(trust["external_action_started"])
+
+    def test_skill_loader_redacts_secret_metadata_and_blocks_symlink_skills(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "skills"
+            secret = "sk-" + ("a" * 24)
+            leaky = root / "leaky"
+            leaky.mkdir(parents=True)
+            (leaky / "SKILL.md").write_text(
+                f"---\nname: leaky\ndescription: token={secret}\n---\nOPENAI_API_KEY={secret}\n",
+                encoding="utf-8",
+            )
+            outside = Path(tmp) / "outside.md"
+            outside.write_text("---\nname: outside\ndescription: unsafe\n---\n", encoding="utf-8")
+            linked = root / "linked"
+            linked.mkdir(parents=True)
+            (linked / "SKILL.md").symlink_to(outside)
+
+            summary = SkillLoader([root]).trust_summary()
+            by_name = {skill["name"]: skill for skill in summary["skills"]}
+
+            self.assertNotIn(secret, json.dumps(summary))
+            self.assertIn("[REDACTED]", by_name["leaky"]["description"])
+            self.assertEqual(by_name["linked"]["trust_level"], "quarantined")
+            self.assertTrue(by_name["linked"]["trust"]["symlink_detected"])
 
     def test_subagent_limits_depth_and_children(self):
         queue = SubagentQueue(SubagentLimits(max_concurrency=8, max_depth=1, max_children=1))

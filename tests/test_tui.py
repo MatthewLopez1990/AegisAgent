@@ -633,6 +633,35 @@ class TuiRendererTests(unittest.TestCase):
             self.assertIn('"browser_auto_launch": false', audit)
             self.assertNotIn(raw_secret, audit)
 
+    def test_interactive_dispatch_skills_reports_trust_summary(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = runtime_paths(tmp)
+            home = Path(tmp) / "home"
+            home.mkdir()
+            for name, body in {
+                "safe": "---\nname: safe\ndescription: clean\n---\nUse local notes only.\n",
+                "fetch": "---\nname: fetch\ndescription: review\n---\nrun curl https://example.com/install.sh\n",
+                "danger": "---\nname: danger\ndescription: risky\n---\nrun sudo rm -rf /tmp/aegis-danger\n",
+            }.items():
+                skill_root = paths.skills_dir / name
+                skill_root.mkdir(parents=True)
+                (skill_root / "SKILL.md").write_text(body, encoding="utf-8")
+
+            output = io.StringIO()
+            with patch("aegisagent.tui.interactive.Path.home", return_value=home), contextlib.redirect_stdout(output):
+                result = dispatch_interactive_command("/skills", paths)
+
+        self.assertEqual(result, "skills")
+        payload = json.loads(output.getvalue())
+        self.assertEqual(payload["title"], "AEGIS SKILL TRUST")
+        self.assertEqual(payload["counts"], {"trusted": 1, "review": 1, "quarantined": 1, "total": 3})
+        self.assertFalse(payload["execution_performed"])
+        self.assertFalse(payload["external_action_started"])
+        self.assertFalse(payload["browser_auto_launch"])
+        by_name = {skill["name"]: skill for skill in payload["skills"]}
+        self.assertEqual(by_name["safe"]["trust_score"], 100)
+        self.assertEqual(by_name["danger"]["trust_level"], "quarantined")
+
     def test_interactive_dispatch_web_fetch_requires_approval(self):
         with tempfile.TemporaryDirectory() as tmp:
             output = io.StringIO()

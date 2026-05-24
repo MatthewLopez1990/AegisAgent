@@ -160,7 +160,7 @@ SLASH_COMMANDS: tuple[tuple[str, str], ...] = (
     ("/memory show", "show one curated memory entry"),
     ("/memory delete", "delete one curated memory entry after approval"),
     ("/memory add", "append a governed note to curated memory after approval"),
-    ("/skills", "scan workspace skill folders"),
+    ("/skills", "show skill trust posture"),
     ("/read", "read a workspace file through a typed non-shell tool"),
     ("/git status", "inspect git status through a typed non-shell tool"),
     ("/git diff", "inspect git diff through a typed non-shell tool"),
@@ -292,7 +292,7 @@ COMMAND_MENU_GROUPS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
             ("/memory show <entry-id>", "inspect redacted curated memory"),
             ("/memory delete <entry-id> | approve", "approval-gated curated memory delete"),
             ("/memory add <workspace|user> | <title> | <body> | approve", "approval-gated curated memory write"),
-            ("/skills", "scan workspace skill folders"),
+            ("/skills", "show skill trust posture"),
             ("/web", "print optional browser GUI launch command"),
             ("/web fetch <url> | approve", "approval-gated terminal URL fetch"),
             ("/browser", "list explicit browser session records"),
@@ -409,7 +409,14 @@ def build_interactive_panels(paths: RuntimePaths, *, active_menu: str | None = N
     sandbox = detect_sandbox()
     counts = enabled_counts()
     memory_files = sorted(paths.memory_dir.glob("*.md")) if paths.memory_dir.exists() else []
-    skills = SkillLoader([paths.skills_dir, Path.home() / ".aegisagent" / "skills"]).discover()
+    skill_summary = SkillLoader([paths.skills_dir, Path.home() / ".aegisagent" / "skills"]).trust_summary(limit=10)
+    skill_counts = skill_summary["counts"]
+    if skill_counts["quarantined"]:
+        skill_badge = f"{skill_counts['quarantined']} quarantine"
+    elif skill_counts["review"]:
+        skill_badge = f"{skill_counts['review']} review"
+    else:
+        skill_badge = f"{skill_counts['trusted']} trusted"
     sessions = SessionStore(paths).list(limit=5)
     automations = automation_summary(paths)
     improvements = improvement_summary(paths)
@@ -471,7 +478,12 @@ def build_interactive_panels(paths: RuntimePaths, *, active_menu: str | None = N
             "MEMORY + SKILLS",
             (
                 InteractiveItem("Memory files", "Curated MEMORY.md / USER.md.", "/memory", str(len(memory_files))),
-                InteractiveItem("Skills", "Workspace and user SKILL.md folders.", "/skills", str(len(skills))),
+                InteractiveItem(
+                    "Skills",
+                    f"{skill_counts['trusted']} trusted / {skill_counts['review']} review / {skill_counts['quarantined']} quarantined.",
+                    "/skills",
+                    skill_badge,
+                ),
                 InteractiveItem("Sessions", "Persistent terminal transcripts.", "/sessions", str(len(sessions))),
                 InteractiveItem("Automations", "Durable gated schedule records.", "/automations", str(automations["count"])),
                 InteractiveItem("Improvements", "Reviewed proposals and governed handoffs.", "/improve", str(improvements["proposal_count"])),
@@ -1291,8 +1303,18 @@ def dispatch_interactive_command(command: str, paths: RuntimePaths) -> str:
         print_json({"indexed": indexed, "results": store.search("AegisAgent", limit=5)})
         return "memory"
     if command.startswith("/skills"):
-        skills = SkillLoader([paths.skills_dir, Path.home() / ".aegisagent" / "skills"]).discover()
-        print_json({"count": len(skills), "skills": [skill.to_dict() for skill in skills[:10]]})
+        summary = SkillLoader([paths.skills_dir, Path.home() / ".aegisagent" / "skills"]).trust_summary(limit=10)
+        receipt = AuditLog(paths).append(
+            "skills.discover",
+            {
+                "counts": summary["counts"],
+                "execution_performed": summary["execution_performed"],
+                "external_action_started": summary["external_action_started"],
+                "browser_auto_launch": summary["browser_auto_launch"],
+                "raw_secret_values_included": summary["raw_secret_values_included"],
+            },
+        )
+        print_json({**summary, "receipt": receipt["id"]})
         return "skills"
     if command.startswith("/read"):
         relative_path = command.removeprefix("/read").strip()

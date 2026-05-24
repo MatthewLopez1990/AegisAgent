@@ -99,6 +99,21 @@ aegis memory --kind user --title "<title>" --add "<body>" --approved
 aegis memory delete <entry-id> --approved
 ```
 
+## Skills And Trust Metadata
+
+Skill handling is passive discovery only. Aegis reads `SKILL.md` files under the workspace `skills/` directory and `~/.aegisagent/skills` as text, redacts body-derived metadata, computes stable hashes, and reports trust posture without executing skills.
+
+```bash
+aegis skills
+aegis skills --limit 10
+```
+
+```text
+/skills
+```
+
+The output includes `trusted`, `review`, and `quarantined` counts plus each visible skill's redacted `name`, `description`, `findings`, `skill_id`, content hashes, and passive safety flags. Quarantine is marker- and path-safety based. Signed bundle verification and policy-integrated skill execution approvals are still future work.
+
 ## Governed Workspace Tools
 
 ```bash
