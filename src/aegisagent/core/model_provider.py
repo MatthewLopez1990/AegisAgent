@@ -440,7 +440,7 @@ def _tool_json(result: dict[str, Any]) -> dict[str, Any]:
 def _default_base_url(provider_name: str) -> str:
     if provider_name.startswith("openai/"):
         return "https://api.openai.com/v1"
-    return "https://api.openai.com/v1"
+    return ""
 
 
 def _validate_base_url(base_url: str) -> str:

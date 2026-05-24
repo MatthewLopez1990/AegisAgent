@@ -91,7 +91,7 @@ def render_command(state: TuiState, width: int, height: int) -> str:
         _blank_panel(left_width),
         _panel_line("Start: /setup next | /activation | /help", left_width),
         _panel_line("First launch: setup is open; composer is live.", left_width),
-        _panel_line("Next: /setup next -> /setup run-checks -> /setup first-task", left_width),
+        _panel_line("Next: /setup next -> /setup model -> /setup run-checks", left_width),
         _panel_line("Use /commands setup for setup lanes; /setup hide dismisses this panel.", left_width),
         _panel_line("Verify: /setup run-checks | /audit | /dashboard", left_width),
         _panel_line("Work: type a request, or use /commands for slash lanes.", left_width),

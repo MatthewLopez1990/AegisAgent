@@ -139,17 +139,22 @@ class CliTests(unittest.TestCase):
         connect_section = readme[connect_index:start_index]
         self.assertIn("aegis model connect openai", connect_section)
         self.assertIn("aegis model connect local", connect_section)
+        self.assertIn("aegis model doctor", connect_section)
+        self.assertIn("aegis model providers", connect_section)
         self.assertIn('export OPENAI_API_KEY="..."', connect_section)
-        self.assertIn("aegis model configure openai/gpt-5.5 --mode api_key --api-key-env OPENAI_API_KEY", connect_section)
-        self.assertIn("aegis model configure openai/gpt-5.5 --mode subscription_cli", connect_section)
-        self.assertIn("metadata-only", connect_section)
+        self.assertIn("aegis model connect openai --model gpt-5.5 --api-key-env OPENAI_API_KEY", connect_section)
+        self.assertIn("aegis model connect openrouter --base-url https://openrouter.ai/api/v1 --model openai/gpt-4o-mini", connect_section)
+        self.assertNotIn("aegis model configure", connect_section)
+        self.assertNotIn("subscription_cli", connect_section)
         self.assertNotIn("model auth login", connect_section)
         self.assertNotIn("model auth logout", connect_section)
         self.assertIn("aegis tui", readme[start_index:update_index])
         self.assertIn("aegis setup next", readme[start_index:update_index])
-        self.assertIn("aegis setup model", readme[start_index:update_index])
         self.assertIn("aegis setup --run-checks", readme[start_index:update_index])
+        self.assertIn("aegis health", readme[start_index:update_index])
         self.assertIn("aegis update --approved", readme)
+        self.assertIn("aegis health", readme[update_index:develop_index])
+        self.assertIn("aegis audit verify", readme[update_index:develop_index])
         self.assertIn("~/.aegis-agent/scripts/update.sh", readme)
         self.assertIn("aegis", readme[install_index:start_index])
         self.assertIn("setup wizard", readme[start_index:update_index])
@@ -243,6 +248,8 @@ class CliTests(unittest.TestCase):
                 ("setup model", ["aegis", "setup", "model"]),
                 ("model connect local", ["aegis", "model", "connect", "local"]),
                 ("model connect openai", ["aegis", "model", "connect", "openai"]),
+                ("model doctor", ["aegis", "model", "doctor"]),
+                ("model connect custom", ["aegis", "model", "connect", "openai", "--model", "gpt-5.5", "--api-key-env", "OPENAI_API_KEY"]),
                 ("model auth login", ["aegis", "model", "auth", "login"]),
                 ("setup checks", ["aegis", "setup", "--run-checks"]),
                 ("health", ["aegis", "health"]),
@@ -265,6 +272,8 @@ class CliTests(unittest.TestCase):
             self.assertIn("AEGIS MODEL CONNECT", outputs["model connect local"])
             self.assertIn("local/terminal-v0", outputs["model connect local"])
             self.assertIn("OPENAI_API_KEY", outputs["model connect openai"])
+            self.assertIn("metadata_only", outputs["model doctor"])
+            self.assertIn("openai/gpt-5.5", outputs["model connect custom"])
             self.assertIn('"status": "unsupported"', outputs["model auth login"])
             self.assertIn("model connect openai", outputs["model auth login"])
             self.assertIn('"browser_auto_launch": false', outputs["setup checks"])
@@ -286,6 +295,9 @@ class CliTests(unittest.TestCase):
             audit_text = (install_dir / ".aegisagent" / "audit.jsonl").read_text(encoding="utf-8")
             self.assertIn("lifecycle.update", audit_text)
             self.assertIn('"browser_auto_launch": false', audit_text)
+            config_text = (install_dir / ".aegisagent" / "config.json").read_text(encoding="utf-8")
+            self.assertIn("OPENAI_API_KEY", config_text)
+            self.assertNotIn("test-key", config_text)
             self.assertFalse(sentinel.exists(), sentinel.read_text(encoding="utf-8") if sentinel.exists() else "")
 
     def test_skills_cli_reports_trust_summary_and_safety_flags(self):
@@ -637,7 +649,8 @@ class CliTests(unittest.TestCase):
         self.assertIn("start here aegis-test setup next", result.stdout)
         self.assertIn("opens      aegis-test setup model", result.stdout)
         self.assertIn("aegis-test setup --run-checks", result.stdout)
-        self.assertIn("aegis-test model providers", result.stdout)
+        self.assertIn("aegis-test model connect local", result.stdout)
+        self.assertIn("export OPENAI_API_KEY=...", result.stdout)
         self.assertIn("No browser is launched by setup", result.stdout)
 
     def test_setup_next_returns_priority_step_state_without_browser(self):
@@ -1595,6 +1608,12 @@ class CliTests(unittest.TestCase):
             self.assertEqual(connected_payload["local_fallback_provider"], "local/terminal-v0")
             self.assertFalse(connected_payload["browser_auto_launch"])
             self.assertFalse(connected_payload["raw_secret_values_included"])
+            config_text = (Path(tmp) / ".aegisagent" / "config.json").read_text(encoding="utf-8")
+            self.assertIn("OPENAI_API_KEY", config_text)
+            self.assertNotIn("test-key", config_text)
+            local_connected = run_cli("--json", "model", "connect", "local", cwd=tmp, extra_env={"OPENAI_API_KEY": "test-key"})
+            self.assertEqual(local_connected.returncode, 0, local_connected.stderr)
+            self.assertEqual(json.loads(local_connected.stdout)["provider"], "local/terminal-v0")
 
             blocked_secret = run_cli("model", "connect", "openai", "--api-key-env", "sk-test-secret", cwd=tmp)
             self.assertEqual(blocked_secret.returncode, 2)
@@ -1608,6 +1627,29 @@ class CliTests(unittest.TestCase):
             self.assertEqual(blocked_query_url.returncode, 2)
             self.assertIn("base-url must not include query strings or fragments", blocked_query_url.stderr)
             self.assertNotIn("secret", blocked_query_url.stderr)
+            blocked_unknown = run_cli("model", "connect", "openrouter", "--model", "openai/gpt-4o-mini", cwd=tmp)
+            self.assertEqual(blocked_unknown.returncode, 2)
+            self.assertIn("base-url is required", blocked_unknown.stderr)
+            custom = run_cli(
+                "--json",
+                "model",
+                "connect",
+                "openrouter",
+                "--model",
+                "openai/gpt-4o-mini",
+                "--base-url",
+                "https://openrouter.ai/api/v1",
+                cwd=tmp,
+                extra_env={"OPENROUTER_API_KEY": "test-key"},
+            )
+            self.assertEqual(custom.returncode, 0, custom.stderr)
+            custom_payload = json.loads(custom.stdout)
+            self.assertEqual(custom_payload["provider"], "openrouter/openai/gpt-4o-mini")
+            self.assertEqual(custom_payload["env_handle"], "OPENROUTER_API_KEY")
+            custom_config = (Path(tmp) / ".aegisagent" / "config.json").read_text(encoding="utf-8")
+            self.assertIn("https://openrouter.ai/api/v1", custom_config)
+            self.assertIn("OPENROUTER_API_KEY", custom_config)
+            self.assertNotIn("test-key", custom_config)
 
             doctor = run_cli("model", "doctor", cwd=tmp)
             self.assertEqual(doctor.returncode, 0, doctor.stderr)

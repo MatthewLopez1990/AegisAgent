@@ -124,14 +124,24 @@ class ProviderStore:
                 "external_action_started": False,
                 "model_invocation_performed": False,
                 "local_fallback_provider": LOCAL_PROVIDER,
-                "next": [f"Run `{command}` or `{command} chat \"summarize this workspace\"`."],
+                "next": [f"Run `{command}` to start the terminal UI."],
             }
 
         route_name = _provider_route_name(target, model=model)
         env_handle = api_key_env.strip() or _default_api_key_env(route_name)
-        configured = self.configure(route_name, mode="api_key", api_key_env=env_handle, base_url=base_url, active=active, source=source)
+        clean_base_url = base_url.strip()
+        if route_name.split("/", 1)[0] != "openai" and not clean_base_url:
+            raise ValueError("base-url is required for OpenAI-compatible providers other than openai")
+        configured = self.configure(route_name, mode="api_key", api_key_env=env_handle, base_url=clean_base_url, active=active, source=source)
         env_present = bool(os.environ.get(env_handle))
         status = "ready" if env_present else "needs_env"
+        next_steps = [
+            f"`{env_handle}` is present; no raw key was stored."
+            if env_present
+            else f"Run `export {env_handle}=\"sk-...\"` in this terminal.",
+            f"Run `{command} model doctor`.",
+            f"Run `{command}` to start the terminal UI.",
+        ]
         return {
             **configured,
             "title": "AEGIS MODEL CONNECT",
@@ -145,11 +155,7 @@ class ProviderStore:
             "external_action_started": False,
             "model_invocation_performed": False,
             "local_fallback_provider": LOCAL_PROVIDER,
-            "next": [
-                f"Export your key with `export {env_handle}=...`." if not env_present else f"`{env_handle}` is present; no raw key was stored.",
-                f"Run `{command} model doctor`.",
-                f"Run `{command} chat \"summarize this workspace\"`.",
-            ],
+            "next": next_steps,
         }
 
     def active_provider(self) -> str:
@@ -176,7 +182,7 @@ class ProviderStore:
             "browser_required": False,
             "external_action_started": False,
             "model_invocation_performed": False,
-            "next": f"Use `{command} model connect openai` or keep `local/terminal-v0` active.",
+            "next": f"Choose one: `{command} model connect local` or `export OPENAI_API_KEY=\"sk-...\"` then `{command} model connect openai`.",
         }
 
     def auth_status(self) -> dict[str, Any]:
@@ -227,7 +233,7 @@ class ProviderStore:
             "model_invocation_performed": False,
             "raw_secret_values_included": False,
             "unsupported": ["login", "logout"],
-            "next": f"Use `{command} model doctor` for metadata-only route checks.",
+            "next": f"Use `{command} model connect openai` after exporting OPENAI_API_KEY, or `{command} model connect local` for no-account local mode.",
         }
 
     def doctor(self) -> dict[str, Any]:

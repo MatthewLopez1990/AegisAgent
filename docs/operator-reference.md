@@ -1,6 +1,44 @@
 # AegisAgent Operator Reference
 
-This reference lists common terminal and TUI commands after AegisAgent is installed. Start with the README for install, first-run setup, update, and safety expectations.
+This reference lists common terminal and TUI commands after AegisAgent is installed. Start with the README for the shortest install and first-run path.
+
+## Terminal Install And Update
+
+Install from GitHub on macOS or Linux:
+
+```bash
+/bin/sh -c "$(curl -fsSL https://raw.githubusercontent.com/MatthewLopez1990/AegisAgent/main/scripts/install.sh)"
+export PATH="$HOME/.local/bin:$PATH"
+command -v aegis
+aegis health
+```
+
+Choose one model route:
+
+```bash
+aegis model connect local
+aegis model doctor
+```
+
+or:
+
+```bash
+export OPENAI_API_KEY="..."
+aegis model connect openai
+aegis model doctor
+```
+
+Update an installed checkout from GitHub:
+
+```bash
+aegis update --approved
+aegis health
+aegis audit verify
+```
+
+Use `aegis install` or `/install` to inspect or reinstall the terminal shim for
+the current checkout. Use `aegis update` or `/update` without approval to preview the
+exact `git pull --ff-only origin main` action before mutating the checkout.
 
 ## Core Lifecycle
 
@@ -25,27 +63,6 @@ aegis update --approved
 ```
 
 `aegisagent` is also installed by the Python package and routes to the same CLI.
-
-## Terminal Install And Update
-
-Install from GitHub on macOS or Linux:
-
-```bash
-/bin/sh -c "$(curl -fsSL https://raw.githubusercontent.com/MatthewLopez1990/AegisAgent/main/scripts/install.sh)"
-export PATH="$HOME/.local/bin:$PATH"
-command -v aegis
-aegis activation
-```
-
-Update an installed checkout from GitHub:
-
-```bash
-aegis update --approved
-```
-
-Use `aegis install` or `/install` to print the installer command again from a
-running copy. Use `aegis update` or `/update` without approval to preview the
-exact `git pull --ff-only origin main` action before mutating the checkout.
 
 ## Aliases And Shortcuts
 
@@ -182,10 +199,20 @@ Root shortcuts do not create singular subcommand families; use `/tasks watch`,
 
 ```bash
 aegis model providers
-aegis model connect openai
 aegis model connect local
-aegis model configure openai/gpt-5.5 --mode api_key --api-key-env OPENAI_API_KEY
+export OPENAI_API_KEY="..."
+aegis model connect openai
 aegis model doctor
+```
+
+Advanced and compatibility provider commands:
+
+```bash
+aegis model connect openai --model gpt-5.5 --api-key-env OPENAI_API_KEY
+export OPENROUTER_API_KEY="..."
+aegis model connect openrouter --base-url https://openrouter.ai/api/v1 --model openai/gpt-4o-mini
+aegis model configure openai/gpt-5.5 --mode api_key --api-key-env OPENAI_API_KEY
+aegis model configure openai/gpt-5.5 --mode subscription_cli
 aegis model usage
 aegis model auth status
 aegis model auth methods

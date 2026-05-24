@@ -22,21 +22,27 @@ Copy and paste this on macOS or Linux:
 /bin/sh -c "$(curl -fsSL https://raw.githubusercontent.com/MatthewLopez1990/AegisAgent/main/scripts/install.sh)"
 ```
 
-Then make sure your shell can find `aegis`:
+If your shell cannot find `aegis` right away, run:
 
 ```bash
 export PATH="$HOME/.local/bin:$PATH"
-command -v aegis
 ```
 
-Pick a model route. Local works with no account:
+Verify:
+
+```bash
+command -v aegis
+aegis health
+```
+
+Use the built-in local model route with no account:
 
 ```bash
 aegis model connect local
 aegis model doctor
 ```
 
-OpenAI is one environment variable plus one connect command:
+Or connect OpenAI with an environment-variable handle:
 
 ```bash
 export OPENAI_API_KEY="..."
@@ -44,32 +50,27 @@ aegis model connect openai
 aegis model doctor
 ```
 
-Start the terminal agent:
+Start Aegis:
 
 ```bash
 aegis
 ```
 
-Inside the terminal UI, type a normal request:
+Inside the terminal UI, type a normal request or slash command:
 
 ```text
 review this workspace
 summarize README.md
-run tests
-```
-
-Or type a slash command for a direct action:
-
-```text
 /setup next
 /agents delegate review this workspace
-/tasks submit draft a safe implementation plan
 ```
 
 Update the installed copy from GitHub later:
 
 ```bash
 aegis update --approved
+aegis health
+aegis audit verify
 ```
 
 ## Install On macOS Or Linux
@@ -84,6 +85,12 @@ git --version
 This works on macOS and Linux. You need `git`, `curl`, and `python3` 3.12 or
 newer. The installer clones GitHub into `~/.aegis-agent` and writes the command
 shim to `~/.local/bin/aegis`.
+
+Install:
+
+```bash
+/bin/sh -c "$(curl -fsSL https://raw.githubusercontent.com/MatthewLopez1990/AegisAgent/main/scripts/install.sh)"
+```
 
 Verify the command:
 
@@ -112,54 +119,64 @@ AEGIS_REPO_URL="https://github.com/MatthewLopez1990/AegisAgent.git"
 
 ## Connect A Model Route
 
-Use one of these. Aegis stores the provider choice and an environment-variable
-name only; it does not store the raw key.
+Aegis stores the provider choice and an environment-variable name only. It does
+not store the raw key.
 
-Local route, no account:
+Choose one.
+
+No account:
 
 ```bash
 aegis model connect local
 aegis model doctor
 ```
 
-OpenAI route:
+OpenAI:
 
 ```bash
 export OPENAI_API_KEY="..."
 aegis model connect openai
 aegis model doctor
-aegis chat "summarize this workspace"
 ```
 
 `aegis model connect openai` defaults to `openai/gpt-5.5` and the
-`OPENAI_API_KEY` environment handle. Use `--model` or `--api-key-env` only when
-you need a non-default route:
+`OPENAI_API_KEY` environment handle.
+
+To keep OpenAI available in future terminals, add the export line to `~/.zshrc`,
+`~/.bashrc`, or your shell profile, then open a new terminal:
 
 ```bash
-aegis model connect openai --model gpt-5.5 --api-key-env OPENAI_API_KEY
+export OPENAI_API_KEY="..."
 ```
 
-Advanced compatibility commands still work:
+Use these only for non-default providers or models:
 
 ```bash
 aegis model providers
-aegis model configure openai/gpt-5.5 --mode api_key --api-key-env OPENAI_API_KEY
-aegis model configure openai/gpt-5.5 --mode subscription_cli
+aegis model connect openai --model gpt-5.5 --api-key-env OPENAI_API_KEY
 ```
 
-The subscription CLI bridge is metadata-only for now. Auth login/logout do not
-launch a browser; use `aegis model connect openai` for the supported external
-provider path.
+OpenAI-compatible endpoints need an environment-variable handle and their base
+URL:
+
+```bash
+export OPENROUTER_API_KEY="..."
+aegis model connect openrouter --base-url https://openrouter.ai/api/v1 --model openai/gpt-4o-mini
+aegis model doctor
+```
+
+Auth login/logout do not launch a browser; use `aegis model connect openai` for
+the supported external provider path.
 
 ## Start The Agent
 
-Run these once after install:
+Run these after install:
 
 ```bash
 export PATH="$HOME/.local/bin:$PATH"
 aegis activation
 aegis setup next
-aegis setup model
+aegis health
 aegis setup --run-checks
 ```
 

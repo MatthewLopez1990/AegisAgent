@@ -134,7 +134,7 @@ class SetupGuide:
             "priority_step": priority.to_dict(),
             "priority": priority.to_dict(),
             "steps": [section.to_dict() for section in sections],
-            "verification_commands": [f"{command} setup --run-checks", "/setup run-checks", "/setup verify"],
+            "verification_commands": [f"{command} health", f"{command} model doctor", f"{command} setup --run-checks", "/setup run-checks", "/setup verify"],
             "next": [
                 f"1. Run `{command} setup next` or `/setup next`.",
                 f"2. Run `{command} setup --run-checks` or `/setup run-checks`.",
@@ -226,17 +226,17 @@ class SetupGuide:
         if name == "model":
             provider = ProviderStore(self.paths).summary()
             command = terminal_command_name()
+            command_list = [
+                f"{command} model connect local",
+                'export OPENAI_API_KEY="..."',
+                f"{command} model connect openai",
+                f"{command} model doctor",
+            ]
             return SetupSection(
                 "model",
                 str(provider.get("mode") or "unknown"),
-                f"Active provider: {provider.get('active_provider', '')}. Use one connect command; Aegis stores only an environment-variable handle, never the raw key.",
-                (
-                    f"{command} model providers",
-                    f"{command} model connect openai",
-                    f"{command} model connect local",
-                    f"{command} model doctor",
-                    f"{command} model configure openai/gpt-5.5 --mode api_key --api-key-env OPENAI_API_KEY",
-                ),
+                f"Active provider: {provider.get('active_provider', '')}. Choose local with no account, or export OPENAI_API_KEY and connect OpenAI. Aegis stores only the environment-variable name, never the raw key.",
+                tuple(command_list),
                 tuple({"name": route["name"], "status": route["status"]} for route in provider.get("routes", [])),
             )
         if name == "secrets":
@@ -323,7 +323,7 @@ class SetupGuide:
             "next": [
                 f"Run `{command}` or `{command} tui` to use the live terminal composer.",
                 "Use `/commands` inside the TUI for command lanes.",
-                "Use `/setup run-checks` before configuring external routes.",
+                "Use `/setup run-checks` after choosing a model route and before normal use.",
             ],
         }
 
@@ -382,7 +382,18 @@ def format_setup_quickstart(payload: dict[str, Any]) -> str:
         lines.append(f"{index}. {section['name']:<10} {section['status']:<18} {section['summary']}")
         if section["commands"]:
             lines.append(f"   next: {section['commands'][0]}")
-    lines.extend(["", f"No browser is launched by setup. Run `{command} setup --run-checks` for metadata-only verification."])
+    lines.extend(
+        [
+            "",
+            "lifecycle",
+            f"- install/repair command: {command} install shim --approved",
+            f"- update from GitHub:    {command} update --approved",
+            f"- model check:           {command} model doctor",
+            f"- readiness check:       {command} setup --run-checks",
+            "",
+            f"No browser is launched by setup. Run `{command} setup --run-checks` for metadata-only verification.",
+        ]
+    )
     return "\n".join(lines)
 
 

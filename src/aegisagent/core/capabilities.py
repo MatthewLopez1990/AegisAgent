@@ -62,10 +62,10 @@ CAPABILITIES: tuple[Capability, ...] = (
         "setup_wizard",
         "Setup wizard",
         "ready",
-        "First launch opens terminal setup with provider, secrets, sandbox, connectors, memory, and checks.",
+        "First launch opens terminal setup with install/update, model provider, secrets, sandbox, connectors, memory, and checks.",
         "primary",
         "Add deeper provider-specific setup validation as routes mature.",
-        ("aegis setup --quick", "aegis setup --run-checks", "/setup"),
+        ("aegis setup next", "aegis setup --run-checks", "/setup next"),
     ),
     Capability(
         "policy_audit_security",
@@ -119,7 +119,7 @@ CAPABILITIES: tuple[Capability, ...] = (
         "Local provider is default; OpenAI-compatible API-key routes can be connected with one command, ready routes can serve terminal chat and subagent workers, failed attempted external calls fall back to the local provider, and top-level plus worker usage is recorded in a terminal-visible ledger.",
         "primary",
         "Add multi-provider fallback ordering and subscription bridge readiness.",
-        ("aegis model connect openai", "aegis chat <prompt>", "aegis model usage", "/model usage"),
+        ("aegis model connect local", "aegis model connect openai", "aegis model doctor", "/model connect openai"),
     ),
     Capability(
         "connectors_messaging_mcp_browser",
@@ -193,12 +193,12 @@ def capability_map(paths: RuntimePaths) -> dict[str, Any]:
     dynamic_commands = {
         "terminal_activation": (command, f"{command} activate", f"{command} tui"),
         "prompt_first_tui": (f"{command} tui", f"{command} tui --print", "/commands"),
-        "setup_wizard": (f"{command} setup --quick", f"{command} setup --run-checks", "/setup"),
+        "setup_wizard": (f"{command} setup next", f"{command} setup --run-checks", "/setup next"),
         "policy_audit_security": (f"{command} tools", f"{command} audit verify", "/policy shell rg --files"),
         "task_queue": (f"{command} tasks --submit <request>", f"{command} tasks --background <request>", "/tasks watch <id>"),
         "agents_subagents": (f"{command} agents", f"{command} agents artifacts", f"{command} agents delegate <task> --depth 2", "/agents bg <task> | depth 2"),
         "memory_sessions_skills": (f"{command} memory list", f"{command} skills", f"{command} skills manifest <skill-name> --approved", "/skills"),
-        "model_provider_routing": (f"{command} model connect openai", f"{command} chat <prompt>", f"{command} model usage", "/model usage"),
+        "model_provider_routing": (f"{command} model connect local", f"{command} model connect openai", f"{command} model doctor", "/model connect openai"),
         "connectors_messaging_mcp_browser": (f"{command} connectors configure webhook --url-env AEGIS_WEBHOOK_URL --enable", f"{command} connectors send webhook --target <label> --message <body> --approved", "/connectors send webhook | <label> | <message> | approve"),
         "gateway_web": (f"{command} web", f"{command} gateway", "/web"),
         "automations_cron": (f"{command} automations due", f"{command} automations missed", "/automations due"),
@@ -243,7 +243,7 @@ def capability_map(paths: RuntimePaths) -> dict[str, Any]:
         "gaps": [capability for capability in capabilities if capability["status"] != "ready"],
         "next": [
             f"Use `{command} capabilities --gaps` or `/gaps` to see remaining Hermes-class backlog.",
-            f"Use `{command} setup --run-checks` before configuring external routes or connectors.",
+            f"Use `{command} setup --run-checks` after choosing a model route and before normal use.",
             "Use `/agents bg <task>` for bounded terminal-first multi-agent work.",
         ],
     }

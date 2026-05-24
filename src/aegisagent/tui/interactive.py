@@ -6,6 +6,7 @@ from contextlib import redirect_stdout
 from dataclasses import dataclass
 import io
 import os
+import shlex
 from pathlib import Path
 import sys
 import time
@@ -325,9 +326,11 @@ COMMAND_MENU_GROUPS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
     (
         "Setup",
         (
+            ("/install", "inspect or repair the macOS/Linux aegis command"),
+            ("/update", "preview or approve a GitHub main update"),
             ("/setup", "open secure first-run setup"),
             ("/setup next", "show the next concrete setup action"),
-            ("/setup model", "show provider configuration steps"),
+            ("/setup model", "choose local or OpenAI model connection"),
             ("/setup model-auth", "alias for provider configuration steps"),
             ("/setup secrets", "show safe secret-handle guidance"),
             ("/setup sandbox", "show sandbox and host-execution posture"),
@@ -529,7 +532,7 @@ def build_interactive_panels(paths: RuntimePaths, *, active_menu: str | None = N
     if active_menu == "setup":
         focus = (
             InteractiveItem("Next step", "Show the next concrete setup action.", "/setup next", "next"),
-            InteractiveItem("Model provider", "Use model connect openai, local fallback, or subscription metadata.", "/setup model", "ready"),
+            InteractiveItem("Model provider", "Choose local or export OPENAI_API_KEY and connect OpenAI.", "/setup model", "ready"),
             InteractiveItem("Secrets handles", "Store env names, never raw token values.", "/setup secrets", "safe"),
             InteractiveItem("Sandbox", "Prefer Docker; keep host execution gated.", "/setup sandbox", "review"),
             InteractiveItem("Connectors", "Slack, Teams, webhook, MCP, browser, Open WebUI metadata.", "/setup connectors", "gated"),
@@ -1120,6 +1123,36 @@ def _parse_connector_send_directive(raw: str) -> tuple[list[str], bool]:
     return [parts[0], parts[1], " | ".join(parts[2:]).strip()], approved
 
 
+def _parse_model_connect_directive(raw: str) -> tuple[str, str, str, str]:
+    try:
+        tokens = shlex.split(raw)
+    except ValueError as exc:
+        raise ValueError(f"invalid model connect arguments: {exc}") from exc
+    provider = "openai"
+    model_name = ""
+    api_key_env = ""
+    base_url = ""
+    index = 0
+    if tokens and not tokens[0].startswith("--"):
+        provider = tokens[0]
+        index = 1
+    while index < len(tokens):
+        token = tokens[index]
+        if token not in {"--model", "--api-key-env", "--base-url"}:
+            raise ValueError(f"unsupported model connect option: {token}")
+        if index + 1 >= len(tokens):
+            raise ValueError(f"{token} requires a value")
+        value = tokens[index + 1]
+        if token == "--model":
+            model_name = value
+        elif token == "--api-key-env":
+            api_key_env = value
+        else:
+            base_url = value
+        index += 2
+    return provider, model_name, api_key_env, base_url
+
+
 def _delegate_with_reuse(orchestrator: LocalSubagentOrchestrator, task: str) -> Any:
     prompt, artifact_ids, approved, requested_depth = _parse_artifact_reuse_directive(task)
     return orchestrator.delegate(prompt, reusable_artifact_ids=artifact_ids, reuse_approved=approved, requested_depth=requested_depth)
@@ -1299,10 +1332,9 @@ def dispatch_interactive_command(command: str, paths: RuntimePaths) -> str:
         return "add-dir"
     if command.startswith("/model connect") or command.startswith("/models connect"):
         raw = command.removeprefix("/model connect").removeprefix("/models connect").strip()
-        parts = raw.split()
-        provider = parts[0] if parts else "openai"
         try:
-            payload = ProviderStore(paths).connect(provider, source="tui")
+            provider, model_name, api_key_env, base_url = _parse_model_connect_directive(raw)
+            payload = ProviderStore(paths).connect(provider, model=model_name, api_key_env=api_key_env, base_url=base_url, source="tui")
         except ValueError as exc:
             print_json({"status": "blocked", "error": str(exc), "browser_auto_launch": False, "external_action_started": False, "raw_secret_values_included": False})
         else:
@@ -2291,14 +2323,15 @@ def _initial_output_lines(paths: RuntimePaths, *, setup_open: bool = False) -> l
                 "The composer is still live: type a normal request or use one of these setup commands.",
                 "",
                 "Setup path:",
-                "1. /setup model        connect OpenAI, use local fallback, or inspect subscription metadata",
-                "2. /setup connectors   inspect Slack, Teams, webhook, MCP, browser, Open WebUI readiness",
-                "3. /setup run-checks   run local metadata-only safety checks",
-                "4. /setup first-task   try one safe starter task",
-                "5. /setup hide         keep future default launches prompt-first",
+                "1. /install            inspect or repair the aegis command",
+                "2. /update             preview or approve GitHub main updates",
+                "3. /setup model        choose local, or export OPENAI_API_KEY and connect OpenAI",
+                "4. /setup run-checks   run local metadata-only safety checks",
+                "5. /setup first-task   try one safe starter task",
+                "6. /setup hide         keep future default launches prompt-first",
                 "",
                 "First launch: setup is open; composer is live.",
-                "Next: /setup next -> /setup run-checks -> /setup first-task",
+                "Next: /setup next -> /setup model -> /setup run-checks -> /setup first-task",
                 "Use /commands setup for setup lanes; /setup hide dismisses this panel.",
                 "Web stays optional and off until explicitly approved.",
                 "",

@@ -34,7 +34,7 @@ class TuiRendererTests(unittest.TestCase):
         self.assertIn("Aegis is active in this terminal.", output)
         self.assertIn("No command has run in this frame.", output)
         self.assertIn("First launch: setup is open; composer is live.", output)
-        self.assertIn("Next: /setup next -> /setup run-checks -> /setup first-task", output)
+        self.assertIn("Next: /setup next -> /setup model -> /setup run-checks", output)
         self.assertIn("Web stays optional and off until explicitly approved.", output)
         self.assertIn("provider   local; /model doctor", output)
         self.assertIn("budgets    planner=8 researcher=12", output)
@@ -199,7 +199,7 @@ class TuiRendererTests(unittest.TestCase):
             self.assertEqual(deck.active_menu, "setup")
             self.assertIn("Aegis setup wizard is open by default.", deck.output_lines)
             self.assertIn("First launch: setup is open; composer is live.", deck.output_lines)
-            self.assertIn("Next: /setup next -> /setup run-checks -> /setup first-task", deck.output_lines)
+            self.assertIn("Next: /setup next -> /setup model -> /setup run-checks -> /setup first-task", deck.output_lines)
             self.assertIn("Web stays optional and off until explicitly approved.", deck.output_lines)
 
             output = io.StringIO()
@@ -600,6 +600,24 @@ class TuiRendererTests(unittest.TestCase):
             self.assertIn("OPENAI_API_KEY", model_connect.getvalue())
             self.assertIn("raw_secret_values_included: false", model_connect.getvalue())
 
+            blocked_custom = io.StringIO()
+            with contextlib.redirect_stdout(blocked_custom):
+                result = dispatch_interactive_command("/model connect openrouter --model openai/gpt-4o-mini", paths)
+
+            self.assertEqual(result, "models")
+            self.assertIn('"status": "blocked"', blocked_custom.getvalue())
+            self.assertIn("base-url is required", blocked_custom.getvalue())
+
+            custom_connect = io.StringIO()
+            with patch.dict(os.environ, {"OPENROUTER_API_KEY": "test-key"}):
+                with contextlib.redirect_stdout(custom_connect):
+                    result = dispatch_interactive_command("/model connect openrouter --base-url https://openrouter.ai/api/v1 --model openai/gpt-4o-mini", paths)
+
+            self.assertEqual(result, "models")
+            self.assertIn("openrouter/openai/gpt-4o-mini", custom_connect.getvalue())
+            self.assertIn("OPENROUTER_API_KEY", custom_connect.getvalue())
+            self.assertNotIn("test-key", custom_connect.getvalue())
+
             setup_model = io.StringIO()
             with contextlib.redirect_stdout(setup_model):
                 result = dispatch_interactive_command("/setup model", paths)
@@ -607,7 +625,8 @@ class TuiRendererTests(unittest.TestCase):
             self.assertEqual(result, "setup")
             self.assertIn("AEGIS SETUP :: model", setup_model.getvalue())
             self.assertIn("aegis model connect openai", setup_model.getvalue())
-            self.assertIn("aegis model configure", setup_model.getvalue())
+            self.assertIn('export OPENAI_API_KEY="..."', setup_model.getvalue())
+            self.assertNotIn("aegis model configure", setup_model.getvalue())
 
             setup_model_auth = io.StringIO()
             with contextlib.redirect_stdout(setup_model_auth):
@@ -615,7 +634,8 @@ class TuiRendererTests(unittest.TestCase):
 
             self.assertEqual(result, "setup")
             self.assertIn("AEGIS SETUP :: model", setup_model_auth.getvalue())
-            self.assertIn("aegis model configure", setup_model_auth.getvalue())
+            self.assertIn("aegis model connect local", setup_model_auth.getvalue())
+            self.assertNotIn("aegis model configure", setup_model_auth.getvalue())
 
             setup_next = io.StringIO()
             with contextlib.redirect_stdout(setup_next):
