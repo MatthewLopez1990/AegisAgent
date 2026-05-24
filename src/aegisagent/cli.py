@@ -190,15 +190,15 @@ def build_parser() -> argparse.ArgumentParser:
     models = sub.add_parser("models", help="Compatibility alias for model provider routes.")
     _add_model_arguments(models)
 
-    connectors = sub.add_parser("connectors", help="Inspect or configure connector readiness metadata.")
+    connectors = sub.add_parser("connectors", help="Inspect connectors, configure approved webhook delivery, or record metadata-only adapter packets.")
     connectors.add_argument("connector_command", nargs="?", default="list", choices=["list", "doctor", "configure", "draft", "send", "outbox"], help="Connector command to run.")
     connectors.add_argument("name", nargs="?", choices=tuple(DEFAULT_CONNECTORS), help="Connector name for configure.")
     connectors.add_argument("--token-env", default="", help="Environment variable name for a token handle; raw values are never stored.")
     connectors.add_argument("--url-env", default="", help="Environment variable name for a URL handle; raw values are never stored.")
-    connectors.add_argument("--enable", action="store_true", help="Mark the connector metadata enabled; sends still require future explicit approval.")
+    connectors.add_argument("--enable", action="store_true", help="Mark the connector enabled; webhook sends require explicit approval and other adapters remain packet-only.")
     connectors.add_argument("--target", default="", help="Message target for draft/send, for example #ops or a webhook label.")
     connectors.add_argument("--message", default="", help="Message body for draft/send. Raw secrets are redacted before persistence.")
-    connectors.add_argument("--approved", action="store_true", help="Record an approved outbound packet when the connector is metadata-ready.")
+    connectors.add_argument("--approved", action="store_true", help="Approve this send; webhook performs live delivery, other adapters record approved packets only.")
     connectors.add_argument("--limit", type=int, default=20, help="Limit outbox records.")
 
     browser = sub.add_parser("browser", help="Manage explicit browser session records without auto-launching a browser.")
@@ -771,7 +771,7 @@ def main(argv: list[str] | None = None) -> int:
                     return 0
                 result = connectors.send(args.name, target=args.target, message=args.message, approved=args.approved, source="cli")
                 print(json.dumps(result, indent=2))
-                return 0 if result["status"] == "approved_pending_adapter" else 1
+                return 0 if result["status"] in {"approved_pending_adapter", "delivered"} else 1
             except (KeyError, ValueError) as exc:
                 print(
                     json.dumps(
@@ -790,18 +790,34 @@ def main(argv: list[str] | None = None) -> int:
         elif args.connector_command == "configure":
             if not args.name:
                 parser.error("connectors configure requires a connector name")
-            print(
-                json.dumps(
-                    connectors.configure(
-                        args.name,
-                        token_env=args.token_env,
-                        url_env=args.url_env,
-                        enabled=args.enable,
-                        source="cli",
-                    ),
-                    indent=2,
+            try:
+                print(
+                    json.dumps(
+                        connectors.configure(
+                            args.name,
+                            token_env=args.token_env,
+                            url_env=args.url_env,
+                            enabled=args.enable,
+                            source="cli",
+                        ),
+                        indent=2,
+                    )
                 )
-            )
+            except (KeyError, ValueError) as exc:
+                print(
+                    json.dumps(
+                        {
+                            "status": "blocked",
+                            "reason": str(exc),
+                            "external_action_started": False,
+                            "external_delivery_performed": False,
+                            "browser_auto_launch": False,
+                            "raw_secret_values_included": False,
+                        },
+                        indent=2,
+                    )
+                )
+                return 1
         return 0
 
     if args.command == "browser":

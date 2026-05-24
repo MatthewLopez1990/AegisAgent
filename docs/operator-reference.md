@@ -193,16 +193,19 @@ aegis model auth doctor
 aegis models providers
 aegis models doctor
 aegis connectors
+aegis connectors configure webhook --url-env AEGIS_WEBHOOK_URL --enable
 aegis connectors configure slack --token-env SLACK_BOT_TOKEN --enable
 aegis connectors doctor
+aegis connectors send webhook --target "ops-status" --message "Status update" --approved
 aegis connectors draft slack --target "#ops" --message "Status update"
 aegis connectors send slack --target "#ops" --message "Status update" --approved
 aegis connectors outbox
 ```
 
-Connector `send` records approval-bound outbox packets only. It does not perform
-Slack, Teams, webhook, or Open WebUI network delivery until live adapters are
-wired behind payload-bound approvals.
+Connector `send` performs live network delivery only for the `webhook` connector
+after explicit approval and a configured URL environment handle. Slack, Teams,
+and Open WebUI sends remain approval-bound outbox packets only; they do not
+contact those services.
 
 ## Tasks And Agents
 

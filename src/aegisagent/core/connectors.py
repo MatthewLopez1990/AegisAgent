@@ -1,10 +1,15 @@
 from __future__ import annotations
 
+import hashlib
+import ipaddress
 import json
 import os
+import socket
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from http.client import HTTPConnection, HTTPException, HTTPSConnection
 from typing import Any
+from urllib.parse import urlparse
 from uuid import uuid4
 
 from aegisagent.config import DEFAULT_CONFIG, RuntimePaths, ensure_runtime
@@ -102,6 +107,10 @@ class ConnectorEnvelope:
     raw_secret_values_included: bool = False
     receipt: str = ""
     reason: str = ""
+    delivery_status_code: int | None = None
+    delivered_at: str = ""
+    destination_fingerprint: str = ""
+    payload_sha256: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -120,6 +129,10 @@ class ConnectorEnvelope:
             "raw_secret_values_included": self.raw_secret_values_included,
             "receipt": self.receipt,
             "reason": self.reason,
+            "delivery_status_code": self.delivery_status_code,
+            "delivered_at": self.delivered_at,
+            "destination_fingerprint": self.destination_fingerprint,
+            "payload_sha256": self.payload_sha256,
         }
 
 
@@ -148,6 +161,10 @@ class ConnectorStore:
     ) -> dict[str, Any]:
         if name not in DEFAULT_CONNECTORS:
             raise KeyError(f"unknown connector: {name}")
+        if token_env:
+            _validate_env_handle(token_env, "token_env")
+        if url_env:
+            _validate_env_handle(url_env, "url_env")
         config = self._load_config()
         connectors = config.setdefault("connectors", {})
         routes = connectors.setdefault("routes", {})
@@ -203,10 +220,12 @@ class ConnectorStore:
             "enabled_count": sum(1 for route in routes if route["enabled"]),
             "outbox_count": len(outbox),
             "approved_pending_adapter_count": sum(1 for envelope in outbox if envelope["status"] == "approved_pending_adapter"),
+            "delivered_count": sum(1 for envelope in outbox if envelope["status"] == "delivered"),
+            "live_delivery_connectors": ["webhook"],
             "external_action_started": False,
             "external_delivery_performed": False,
             "browser_auto_launch": False,
-            "next": f"Use `{command} connectors draft slack --target '#ops' --message 'status'`, then approve a send only when the adapter is configured.",
+            "next": f"Use `{command} connectors configure webhook --url-env AEGIS_WEBHOOK_URL --enable`, then approve each webhook send explicitly.",
         }
 
     def doctor(self) -> dict[str, Any]:
@@ -259,6 +278,24 @@ class ConnectorStore:
     def send(self, name: str, *, target: str, message: str, approved: bool = False, source: str = "cli") -> dict[str, Any]:
         route = self._messaging_route(name)
         envelope = self._envelope(route, target=target, message=message, status="needs_approval", source=source)
+        if route.name == "webhook" and _connector_ready(route):
+            try:
+                envelope = _with_webhook_metadata(os.environ.get(route.url_env, "") if route.url_env else "", envelope)
+            except ValueError as exc:
+                blocked = ConnectorEnvelope(**{**envelope.to_dict(), "status": "blocked", "reason": str(exc)})
+                receipt = self.audit.append(
+                    "connector.delivery.blocked",
+                    {
+                        **_audit_envelope(blocked),
+                        "reason": str(exc),
+                        "external_action_started": False,
+                        "external_delivery_performed": False,
+                        "browser_auto_launch": False,
+                        "raw_secret_values_included": False,
+                        "url_included": False,
+                    },
+                )
+                return {"status": "blocked", "reason": str(exc), "envelope": {**blocked.to_dict(), "receipt": receipt["id"]}, "receipt": receipt["id"]}
         if not approved:
             receipt = self.audit.append(
                 "connector.delivery.needs_approval",
@@ -268,10 +305,11 @@ class ConnectorStore:
                     "external_delivery_performed": False,
                     "browser_auto_launch": False,
                     "raw_secret_values_included": False,
+                    "url_included": False,
                 },
             )
             return {"status": "needs_approval", "envelope": {**envelope.to_dict(), "receipt": receipt["id"]}, "receipt": receipt["id"]}
-        if route.status != "enabled_ready_metadata_only":
+        if not _connector_ready(route):
             reason = f"connector {name} is {route.status}; configure required handles before approval can be recorded"
             blocked = ConnectorEnvelope(**{**envelope.to_dict(), "status": "blocked", "approved": False, "reason": reason})
             receipt = self.audit.append(
@@ -286,6 +324,8 @@ class ConnectorStore:
                 },
             )
             return {"status": "blocked", "reason": reason, "envelope": {**blocked.to_dict(), "receipt": receipt["id"]}, "receipt": receipt["id"]}
+        if route.name == "webhook":
+            return self._send_webhook(route, envelope)
         approved_envelope = ConnectorEnvelope(
             **{
                 **envelope.to_dict(),
@@ -344,8 +384,86 @@ class ConnectorStore:
             status=status,
             created_at=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
             source=source,
-            delivery_ready=route.status == "enabled_ready_metadata_only",
+            delivery_ready=_connector_ready(route),
         )
+
+    def _send_webhook(self, route: ConnectorRoute, envelope: ConnectorEnvelope) -> dict[str, Any]:
+        webhook_url = os.environ.get(route.url_env, "") if route.url_env else ""
+        try:
+            response = _post_webhook(webhook_url, envelope)
+        except ValueError as exc:
+            blocked = ConnectorEnvelope(**{**envelope.to_dict(), "status": "blocked", "approved": True, "delivery_ready": True, "reason": str(exc)})
+            receipt = self.audit.append(
+                "connector.delivery.blocked",
+                {
+                    **_audit_envelope(blocked),
+                    "reason": str(exc),
+                    "external_action_started": False,
+                    "external_delivery_performed": False,
+                    "browser_auto_launch": False,
+                    "raw_secret_values_included": False,
+                    "url_included": False,
+                },
+            )
+            return {"status": "blocked", "reason": str(exc), "envelope": {**blocked.to_dict(), "receipt": receipt["id"]}, "receipt": receipt["id"]}
+        except (OSError, HTTPException) as exc:
+            reason = _safe_error(exc)
+            failed = ConnectorEnvelope(
+                **{
+                    **envelope.to_dict(),
+                    "status": "delivery_failed",
+                    "approved": True,
+                    "delivery_ready": True,
+                    "reason": reason,
+                }
+            )
+            receipt = self.audit.append(
+                "connector.delivery.failed",
+                {
+                    **_audit_envelope(failed),
+                    "reason": reason,
+                    "external_action_started": True,
+                    "external_delivery_performed": False,
+                    "browser_auto_launch": False,
+                    "raw_secret_values_included": False,
+                    "url_included": False,
+                },
+            )
+            failed = ConnectorEnvelope(**{**failed.to_dict(), "receipt": receipt["id"]})
+            self._append_outbox(failed)
+            return {"status": "delivery_failed", "reason": reason, "envelope": failed.to_dict(), "receipt": receipt["id"]}
+
+        status = "delivered" if 200 <= response["status_code"] < 300 else "delivery_failed"
+        reason = "" if status == "delivered" else f"webhook returned HTTP {response['status_code']}"
+        delivered = ConnectorEnvelope(
+            **{
+                **envelope.to_dict(),
+                "status": status,
+                "approved": True,
+                "delivery_ready": True,
+                "external_delivery_performed": status == "delivered",
+                "reason": reason,
+                "delivery_status_code": response["status_code"],
+                "delivered_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z") if status == "delivered" else "",
+            }
+        )
+        receipt = self.audit.append(
+            "connector.delivery.sent" if status == "delivered" else "connector.delivery.failed",
+            {
+                **_audit_envelope(delivered),
+                "delivery_status_code": response["status_code"],
+                "reason": reason,
+                "external_action_started": True,
+                "external_delivery_performed": status == "delivered",
+                "browser_auto_launch": False,
+                "raw_secret_values_included": False,
+                "url_included": False,
+                "redirects_followed": False,
+            },
+        )
+        delivered = ConnectorEnvelope(**{**delivered.to_dict(), "receipt": receipt["id"]})
+        self._append_outbox(delivered)
+        return {"status": status, "envelope": delivered.to_dict(), "receipt": receipt["id"], "delivery_status_code": response["status_code"]}
 
     def _append_outbox(self, envelope: ConnectorEnvelope) -> None:
         self.outbox_path.parent.mkdir(parents=True, exist_ok=True)
@@ -399,11 +517,26 @@ def _connector_status(name: str, enabled: bool, token_env: str, url_env: str) ->
     if not enabled:
         return "not_configured"
     missing = [env_name for env_name in (token_env, url_env) if env_name and not os.environ.get(env_name)]
-    return "enabled_missing_handles" if missing else "enabled_ready_metadata_only"
+    if missing:
+        return "enabled_missing_handles"
+    if name == "webhook":
+        return "enabled_ready_webhook_delivery"
+    return "enabled_ready_metadata_only"
+
+
+def _connector_ready(route: ConnectorRoute) -> bool:
+    return route.status in {"enabled_ready_metadata_only", "enabled_ready_webhook_delivery"}
+
+
+def _validate_env_handle(value: str, field: str) -> None:
+    if "://" in value or "/" in value or "?" in value or "#" in value:
+        raise ValueError(f"{field} must be an environment variable name, not a raw URL or secret")
+    if not value.replace("_", "A").isalnum() or value[0].isdigit():
+        raise ValueError(f"{field} must be an environment variable name")
 
 
 def _audit_envelope(envelope: ConnectorEnvelope) -> dict[str, Any]:
-    return {
+    payload = {
         "id": envelope.id,
         "connector": envelope.connector,
         "target": envelope.target,
@@ -413,3 +546,139 @@ def _audit_envelope(envelope: ConnectorEnvelope) -> dict[str, Any]:
         "delivery_ready": envelope.delivery_ready,
         "source": envelope.source,
     }
+    if envelope.destination_fingerprint:
+        payload["destination_fingerprint"] = envelope.destination_fingerprint
+    if envelope.payload_sha256:
+        payload["payload_sha256"] = envelope.payload_sha256
+    if envelope.delivery_status_code is not None:
+        payload["delivery_status_code"] = envelope.delivery_status_code
+    return payload
+
+
+def _with_webhook_metadata(webhook_url: str, envelope: ConnectorEnvelope) -> ConnectorEnvelope:
+    parsed = urlparse(webhook_url)
+    _validate_webhook_destination(parsed)
+    canonical = _canonical_webhook_destination(parsed)
+    payload_sha = hashlib.sha256(json.dumps({"connector": envelope.connector, "target": envelope.target, "message": envelope.message}, sort_keys=True).encode("utf-8")).hexdigest()
+    return ConnectorEnvelope(
+        **{
+            **envelope.to_dict(),
+            "destination_fingerprint": hashlib.sha256(canonical.encode("utf-8")).hexdigest(),
+            "payload_sha256": payload_sha,
+        }
+    )
+
+
+def _post_webhook(webhook_url: str, envelope: ConnectorEnvelope) -> dict[str, Any]:
+    parsed = urlparse(webhook_url)
+    _validate_webhook_destination(parsed)
+    if not envelope.destination_fingerprint or not envelope.payload_sha256:
+        envelope = _with_webhook_metadata(webhook_url, envelope)
+    expected_fingerprint = hashlib.sha256(_canonical_webhook_destination(parsed).encode("utf-8")).hexdigest()
+    if envelope.destination_fingerprint != expected_fingerprint:
+        raise ValueError("webhook destination fingerprint changed after approval")
+    expected_payload = hashlib.sha256(json.dumps({"connector": envelope.connector, "target": envelope.target, "message": envelope.message}, sort_keys=True).encode("utf-8")).hexdigest()
+    if envelope.payload_sha256 != expected_payload:
+        raise ValueError("webhook payload hash changed after approval")
+    body = json.dumps(
+        {
+            "id": envelope.id,
+            "connector": envelope.connector,
+            "target": envelope.target,
+            "message": envelope.message,
+            "source": envelope.source,
+            "created_at": envelope.created_at,
+        }
+    ).encode("utf-8")
+    path = parsed.path or "/"
+    if parsed.query:
+        path += f"?{parsed.query}"
+    connection_cls = HTTPSConnection if parsed.scheme == "https" else HTTPConnection
+    port = parsed.port
+    connection = connection_cls(parsed.hostname, port=port, timeout=5)
+    try:
+        connection.request(
+            "POST",
+            path,
+            body=body,
+            headers={
+                "Content-Type": "application/json",
+                "User-Agent": "AegisAgent-Connector/1.0",
+            },
+        )
+        response = connection.getresponse()
+        response.read(2048)
+        return {"status_code": int(response.status)}
+    finally:
+        connection.close()
+
+
+def _validate_webhook_destination(parsed) -> None:
+    if parsed.scheme not in {"http", "https"}:
+        raise ValueError("webhook URL handle must use http or https")
+    if parsed.scheme == "http" and not _dev_insecure_webhook_allowed():
+        raise ValueError("webhook URL handle must use https unless AEGIS_WEBHOOK_ALLOW_INSECURE_LOCAL=1")
+    if not parsed.hostname:
+        raise ValueError("webhook URL handle must include a host")
+    if parsed.username or parsed.password:
+        raise ValueError("webhook URL handle must not include credentials")
+    if parsed.fragment:
+        raise ValueError("webhook URL handle must not include fragments")
+    _validate_public_webhook_host(parsed.hostname, parsed.port)
+
+
+def _validate_public_webhook_host(hostname: str, port: int | None) -> None:
+    allow_local = _dev_insecure_webhook_allowed()
+    try:
+        addresses = [ipaddress.ip_address(hostname)]
+    except ValueError:
+        try:
+            infos = socket.getaddrinfo(hostname, port or 443, type=socket.SOCK_STREAM)
+        except socket.gaierror as exc:
+            raise ValueError("webhook URL host could not be resolved") from exc
+        addresses = []
+        for info in infos:
+            address = info[4][0]
+            try:
+                addresses.append(ipaddress.ip_address(address))
+            except ValueError:
+                continue
+    if not addresses:
+        raise ValueError("webhook URL host could not be resolved")
+    for address in addresses:
+        if _is_restricted_address(address) and not allow_local:
+            raise ValueError("webhook URL host resolves to a restricted network")
+
+
+def _is_restricted_address(address: ipaddress._BaseAddress) -> bool:
+    return any(
+        (
+            address.is_private,
+            address.is_loopback,
+            address.is_link_local,
+            address.is_multicast,
+            address.is_reserved,
+            address.is_unspecified,
+        )
+    )
+
+
+def _canonical_webhook_destination(parsed) -> str:
+    host = (parsed.hostname or "").lower()
+    port = parsed.port
+    default_port = 443 if parsed.scheme == "https" else 80
+    port_text = "" if not port or port == default_port else f":{port}"
+    path = parsed.path or "/"
+    query = f"?{parsed.query}" if parsed.query else ""
+    return f"{parsed.scheme}://{host}{port_text}{path}{query}"
+
+
+def _dev_insecure_webhook_allowed() -> bool:
+    return os.environ.get("AEGIS_WEBHOOK_ALLOW_INSECURE_LOCAL") == "1"
+
+
+def _safe_error(exc: BaseException) -> str:
+    redacted = redact_mapping({"error": str(exc)})[0]["error"]
+    if len(redacted) > 180:
+        redacted = redacted[:177] + "..."
+    return redacted or exc.__class__.__name__

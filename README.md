@@ -348,9 +348,19 @@ aegis connectors configure slack --token-env SLACK_BOT_TOKEN --enable
 aegis connectors doctor
 ```
 
-Connector delivery is not live yet. The terminal can draft redacted connector
-packets and record an explicit approval packet in the outbox, but no Slack,
-Teams, webhook, or Open WebUI network delivery is performed by these commands:
+Webhook delivery is the only live connector delivery path. Configure it with an
+environment-variable URL handle, then approve each send explicitly:
+
+```bash
+export AEGIS_WEBHOOK_URL="https://example.invalid/aegis-hook"
+aegis connectors configure webhook --url-env AEGIS_WEBHOOK_URL --enable
+aegis connectors doctor
+aegis connectors send webhook --target "ops-status" --message "Status update" --approved
+aegis connectors outbox
+```
+
+Slack, Teams, and Open WebUI connector commands remain metadata/outbox-only;
+approving those packets does not contact those services:
 
 ```bash
 aegis connectors draft slack --target "#ops" --message "Status update"
@@ -435,8 +445,9 @@ Implemented: install/update lifecycle, terminal activation, TUI, terminal
 command catalog, setup checks, health checks, policy/audit receipts, typed
 workspace tools, governed git operations, task queues, automations,
 OpenAI-compatible model routing for chat and role workers, scoped model usage
-ledger rows, connector metadata with a redacted approval-bound outbox, memory
-review controls, passive skill trust metadata, and local agent/subagent
+ledger rows, connector metadata with a redacted approval-bound outbox,
+approval-gated webhook delivery, memory review controls, passive skill trust
+metadata, and local agent/subagent
 orchestration with provider fallback metadata, durable role artifacts,
 artifact list/show/search, structured role-specific tool budget policies,
 stage-to-stage handoff metadata, opt-in depth-2 reviewer nesting,

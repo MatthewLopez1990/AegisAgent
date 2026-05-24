@@ -184,10 +184,10 @@ SLASH_COMMANDS: tuple[tuple[str, str], ...] = (
     ("/model auth methods", "show read-only model auth methods"),
     ("/model auth doctor", "run metadata-only model auth checks"),
     ("/models providers", "alias for model provider routes"),
-    ("/connectors", "show connector readiness metadata"),
+    ("/connectors", "show connector readiness metadata and webhook delivery posture"),
     ("/connectors doctor", "run metadata-only connector checks"),
     ("/connectors draft", "draft a redacted outbound connector packet"),
-    ("/connectors send", "record an approved outbound connector packet"),
+    ("/connectors send", "send approved webhook packets or record approved metadata packets"),
     ("/connectors outbox", "show connector packet outbox"),
     ("/memory", "index and search local memory"),
     ("/memory search", "search local memory by query"),
@@ -356,7 +356,8 @@ COMMAND_MENU_GROUPS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
             ("/connectors", "show connector readiness metadata"),
             ("/connectors doctor", "run metadata-only connector checks"),
             ("/connectors draft <name> | <target> | <message>", "draft outbound connector packet"),
-            ("/connectors send <name> | <target> | <message> | approve", "approval-bound connector packet"),
+            ("/connectors send webhook | <target> | <message> | approve", "approval-gated live webhook delivery"),
+            ("/connectors send <name> | <target> | <message> | approve", "approval-bound connector packet for non-webhook adapters"),
             ("/connectors outbox", "show approved/drafted connector packets"),
             ("/memory", "index and search local memory"),
             ("/memory search <query>", "search local memory by query"),
@@ -1108,6 +1109,17 @@ def _parse_artifact_reuse_directive(raw: str) -> tuple[str, list[str], bool, int
     return prompt, list(dict.fromkeys(artifact_ids)), approved, requested_depth
 
 
+def _parse_connector_send_directive(raw: str) -> tuple[list[str], bool]:
+    parts = [part.strip() for part in raw.split("|")]
+    approved = False
+    if parts and parts[-1].lower() in {"approve", "approved", "yes"}:
+        approved = True
+        parts = parts[:-1]
+    if len(parts) < 3:
+        return parts, approved
+    return [parts[0], parts[1], " | ".join(parts[2:]).strip()], approved
+
+
 def _delegate_with_reuse(orchestrator: LocalSubagentOrchestrator, task: str) -> Any:
     prompt, artifact_ids, approved, requested_depth = _parse_artifact_reuse_directive(task)
     return orchestrator.delegate(prompt, reusable_artifact_ids=artifact_ids, reuse_approved=approved, requested_depth=requested_depth)
@@ -1339,19 +1351,18 @@ def dispatch_interactive_command(command: str, paths: RuntimePaths) -> str:
             try:
                 print_json(ConnectorStore(paths).draft(parts[0], target=parts[1], message=parts[2], source="tui"))
             except (KeyError, ValueError) as exc:
-                print_json({"status": "blocked", "reason": str(exc), "external_delivery_performed": False, "browser_auto_launch": False})
+                print_json({"status": "blocked", "reason": str(exc), "external_action_started": False, "external_delivery_performed": False, "browser_auto_launch": False, "raw_secret_values_included": False, "url_included": False})
         return "connectors"
     if _slash_invoked(command, "/connectors send"):
         raw = _slash_remainder(command, "/connectors send")
-        parts = [part.strip() for part in raw.split("|", 3)]
-        approved = len(parts) == 4 and parts[3].lower() in {"approve", "approved", "yes"}
+        parts, approved = _parse_connector_send_directive(raw)
         if len(parts) < 3 or not all(parts[:3]):
             print("Usage: /connectors send <name> | <target> | <message> | approve")
         else:
             try:
                 print_json(ConnectorStore(paths).send(parts[0], target=parts[1], message=parts[2], approved=approved, source="tui"))
             except (KeyError, ValueError) as exc:
-                print_json({"status": "blocked", "reason": str(exc), "external_delivery_performed": False, "browser_auto_launch": False})
+                print_json({"status": "blocked", "reason": str(exc), "external_action_started": False, "external_delivery_performed": False, "browser_auto_launch": False, "raw_secret_values_included": False, "url_included": False})
         return "connectors"
     if _slash_invoked(command, "/connectors outbox"):
         print_json(

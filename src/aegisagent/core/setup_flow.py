@@ -274,8 +274,8 @@ class SetupGuide:
             return SetupSection(
                 "connectors",
                 f"{connector_summary['enabled_count']}_enabled",
-                "Slack, Teams, webhooks, MCP, browser, and Open WebUI adapters are tracked as local metadata; none can deliver externally without explicit future approval.",
-                (f"{command} connectors", f"{command} connectors doctor", f"{command} connectors configure slack --token-env SLACK_BOT_TOKEN --enable"),
+                "Webhook can deliver externally only after an explicit approved send and a configured URL handle; Slack, Teams, MCP, browser, and Open WebUI remain metadata/outbox-only.",
+                (f"{command} connectors", f"{command} connectors doctor", f"{command} connectors configure webhook --url-env AEGIS_WEBHOOK_URL --enable"),
                 (
                     {"name": "external_delivery", "default": "ask", "external_delivery_performed": connector_summary["external_delivery_performed"]},
                     {"name": "browser_auto_launch", "ok": connector_summary["browser_auto_launch"]},

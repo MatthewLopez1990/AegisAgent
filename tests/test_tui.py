@@ -11,6 +11,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from aegisagent.config import runtime_paths
+from aegisagent.core.connectors import ConnectorStore
 from aegisagent.core.memory import MemoryStore
 from aegisagent.core.setup_state import setup_wizard_preferences
 from aegisagent.core.skills import SkillLoader
@@ -443,6 +444,15 @@ class TuiRendererTests(unittest.TestCase):
             ):
                 self.assertIn(marker, agents_text)
 
+            connectors_output = io.StringIO()
+            with contextlib.redirect_stdout(connectors_output):
+                result = dispatch_interactive_command("/commands connectors", paths)
+
+            self.assertEqual(result, "commands")
+            connectors_text = connectors_output.getvalue()
+            self.assertIn("/connectors send webhook | <target> | <message> | approve", connectors_text)
+            self.assertIn("approval-gated live webhook delivery", connectors_text)
+
             json_output = io.StringIO()
             with contextlib.redirect_stdout(json_output):
                 result = dispatch_interactive_command("/commands json", paths)
@@ -751,6 +761,55 @@ class TuiRendererTests(unittest.TestCase):
             self.assertIn('"count": 1', usage.getvalue())
             self.assertIn('"provider": "local/terminal-v0"', usage.getvalue())
             self.assertIn('"browser_auto_launch": false', usage.getvalue())
+
+    def test_interactive_dispatch_webhook_connector_delivers_after_approval(self):
+        seen: dict[str, object] = {"bodies": []}
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self):
+                size = int(self.headers.get("Content-Length", "0"))
+                seen["bodies"].append(json.loads(self.rfile.read(size).decode("utf-8")))
+                self.send_response(204)
+                self.end_headers()
+
+            def log_message(self, *_args):  # pragma: no cover - keep test output quiet
+                return
+
+        server = HTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                paths = runtime_paths(tmp)
+                raw_secret = "sk-abcdefghijklmnopqrstuvwxyz123456"
+                webhook_url = f"http://127.0.0.1:{server.server_port}/hook?token={raw_secret}"
+                ConnectorStore(paths).configure("webhook", url_env="AEGIS_TEST_WEBHOOK_URL", enabled=True, source="test")
+                webhook_env = {"AEGIS_TEST_WEBHOOK_URL": webhook_url, "AEGIS_WEBHOOK_ALLOW_INSECURE_LOCAL": "1"}
+                preview = io.StringIO()
+                with patch.dict(os.environ, webhook_env), contextlib.redirect_stdout(preview):
+                    result = dispatch_interactive_command(f"/connectors send webhook | ops-hook | hello token={raw_secret}", paths)
+
+                self.assertEqual(result, "connectors")
+                self.assertIn('"status": "needs_approval"', preview.getvalue())
+                self.assertNotIn(raw_secret, preview.getvalue())
+                self.assertEqual(seen["bodies"], [])
+
+                output = io.StringIO()
+                with patch.dict(os.environ, webhook_env), contextlib.redirect_stdout(output):
+                    result = dispatch_interactive_command(f"/connectors send webhook | ops-hook | hello token={raw_secret} | approve", paths)
+
+                self.assertEqual(result, "connectors")
+                self.assertIn('"status": "delivered"', output.getvalue())
+                self.assertIn('"external_delivery_performed": true', output.getvalue())
+                self.assertNotIn(raw_secret, output.getvalue())
+                self.assertEqual(seen["bodies"][0]["message"], "hello token=[REDACTED]")
+                audit = (paths.state_dir / "audit.jsonl").read_text(encoding="utf-8")
+                self.assertIn("connector.delivery.sent", audit)
+                self.assertNotIn(raw_secret, audit)
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
 
     def test_interactive_dispatch_task_queue_controls(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -516,6 +516,7 @@ class CliTests(unittest.TestCase):
     def test_commands_catalog_is_terminal_only_and_filterable(self):
         with tempfile.TemporaryDirectory() as tmp:
             text = run_cli("commands", "agents", cwd=tmp)
+            connectors_text = run_cli("commands", "connectors", cwd=tmp)
             payload_result = run_cli("commands", "--group", "Build", "--json", cwd=tmp)
 
         self.assertEqual(text.returncode, 0, text.stderr)
@@ -523,6 +524,9 @@ class CliTests(unittest.TestCase):
         self.assertIn("safety terminal_first=true browser_auto_launch=false gateway_started=false", text.stdout)
         self.assertIn("/agents contracts", text.stdout)
         self.assertIn("/agents delegate <task>", text.stdout)
+        self.assertEqual(connectors_text.returncode, 0, connectors_text.stderr)
+        self.assertIn("/connectors send webhook | <target> | <message> | approve", connectors_text.stdout)
+        self.assertIn("approval-gated live webhook delivery", connectors_text.stdout)
         self.assertEqual(payload_result.returncode, 0, payload_result.stderr)
         payload = json.loads(payload_result.stdout)
         self.assertEqual(payload["title"], "AEGIS TERMINAL COMMAND CATALOG")
@@ -1678,6 +1682,10 @@ class CliTests(unittest.TestCase):
             self.assertIn("connector.configured", audit)
             self.assertIn("connector.doctor", audit)
 
+            raw_url = run_cli("connectors", "configure", "webhook", "--url-env", "https://example.invalid/hook", "--enable", cwd=tmp)
+            self.assertEqual(raw_url.returncode, 1)
+            self.assertIn("raw URL", json.loads(raw_url.stdout)["reason"])
+
     def test_connector_outbound_packets_are_approval_bound_and_redacted(self):
         with tempfile.TemporaryDirectory() as tmp:
             raw_secret = "sk-abcdefghijklmnopqrstuvwxyz123456"
@@ -1737,6 +1745,73 @@ class CliTests(unittest.TestCase):
             self.assertIn("connector.delivery.approved_pending_adapter", audit)
             self.assertIn('"external_delivery_performed": false', audit)
             self.assertNotIn(raw_secret, audit)
+
+    def test_webhook_connector_delivers_only_after_approval(self):
+        seen: dict[str, object] = {"bodies": [], "paths": []}
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self):
+                size = int(self.headers.get("Content-Length", "0"))
+                seen["paths"].append(self.path)
+                seen["bodies"].append(json.loads(self.rfile.read(size).decode("utf-8")))
+                self.send_response(204)
+                self.end_headers()
+
+            def log_message(self, *_args):  # pragma: no cover - keep test output quiet
+                return
+
+        server = HTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                raw_secret = "sk-abcdefghijklmnopqrstuvwxyz123456"
+                webhook_url = f"http://127.0.0.1:{server.server_port}/hook?token={raw_secret}"
+                configured = run_cli("connectors", "configure", "webhook", "--url-env", "AEGIS_TEST_WEBHOOK_URL", "--enable", cwd=tmp, extra_env={"AEGIS_TEST_WEBHOOK_URL": webhook_url})
+                self.assertEqual(configured.returncode, 0, configured.stderr)
+                self.assertEqual(json.loads(configured.stdout)["connector"]["status"], "enabled_ready_webhook_delivery")
+
+                blocked_local = run_cli("connectors", "send", "webhook", "--target", "ops-hook", "--message", "hello", "--approved", cwd=tmp, extra_env={"AEGIS_TEST_WEBHOOK_URL": webhook_url})
+                self.assertEqual(blocked_local.returncode, 1)
+                self.assertEqual(json.loads(blocked_local.stdout)["status"], "blocked")
+                self.assertEqual(seen["bodies"], [])
+
+                webhook_env = {"AEGIS_TEST_WEBHOOK_URL": webhook_url, "AEGIS_WEBHOOK_ALLOW_INSECURE_LOCAL": "1"}
+                preview = run_cli("connectors", "send", "webhook", "--target", "ops-hook", "--message", f"hello token={raw_secret}", cwd=tmp, extra_env=webhook_env)
+                self.assertEqual(preview.returncode, 1)
+                self.assertEqual(json.loads(preview.stdout)["status"], "needs_approval")
+                self.assertEqual(seen["bodies"], [])
+                self.assertEqual(seen["paths"], [])
+                self.assertNotIn(raw_secret, preview.stdout)
+
+                delivered = run_cli("connectors", "send", "webhook", "--target", "ops-hook", "--message", f"hello token={raw_secret}", "--approved", cwd=tmp, extra_env=webhook_env)
+                self.assertEqual(delivered.returncode, 0, delivered.stderr)
+                payload = json.loads(delivered.stdout)
+                self.assertEqual(payload["status"], "delivered")
+                self.assertEqual(payload["delivery_status_code"], 204)
+                self.assertTrue(payload["envelope"]["external_delivery_performed"])
+                self.assertFalse(payload["envelope"]["browser_auto_launch"])
+                self.assertEqual(seen["paths"], [f"/hook?token={raw_secret}"])
+                self.assertEqual(seen["bodies"][0]["connector"], "webhook")
+                self.assertEqual(seen["bodies"][0]["target"], "ops-hook")
+                self.assertEqual(seen["bodies"][0]["message"], "hello token=[REDACTED]")
+
+                outbox = run_cli("connectors", "outbox", cwd=tmp)
+                self.assertEqual(outbox.returncode, 0, outbox.stderr)
+                self.assertIn('"delivered"', outbox.stdout)
+                self.assertNotIn(raw_secret, delivered.stdout)
+                self.assertNotIn(raw_secret, outbox.stdout)
+                audit = (Path(tmp) / ".aegisagent" / "audit.jsonl").read_text(encoding="utf-8")
+                self.assertIn("connector.delivery.sent", audit)
+                self.assertIn('"external_action_started": true', audit)
+                self.assertIn('"external_delivery_performed": true', audit)
+                self.assertIn('"url_included": false', audit)
+                self.assertNotIn(raw_secret, audit)
+                self.assertNotIn(webhook_url, audit)
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
 
     def test_tasks_submit_run_cancel(self):
         with tempfile.TemporaryDirectory() as tmp:
