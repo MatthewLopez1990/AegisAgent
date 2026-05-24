@@ -1,71 +1,60 @@
 # AegisAgent
 
-AegisAgent is a terminal-first autonomous agent console with visible governance. It is designed to feel like a secure Hermes-style agent: prompt-first TUI, slash commands, local memory, typed tools, subagents, task queues, automations, provider metadata, connector metadata, audit receipts, and explicit approvals.
-
-The normal product is the terminal command:
+AegisAgent is a terminal-first autonomous agent console with visible governance. The normal user command is:
 
 ```bash
 aegis
 ```
 
+It is built for a secure Hermes-style workflow: prompt-first TUI, slash commands, typed tools, local memory, task queues, subagents, automations, audit receipts, and explicit approval gates.
+
 AegisAgent does not open a browser during install, setup, update, launch, health checks, or normal terminal use. The web console is optional and must be started separately.
 
-## Install On macOS Or Linux
+## Operating Model
 
-Prerequisites:
+- Aegis is terminal-first. Install, setup, health checks, updates, and normal agent work are driven by the `aegis` terminal command.
+- The web console is optional. It is not started by install, setup, update, health checks, or normal TUI use.
+- Read-only inspection can run without approval.
+- Workspace writes, shell mutations, network fetches, browser records, external sends, git stage/commit/branch, git remote fetch/pull/push, and `aegis update` require explicit approval.
+- TUI approval uses `| approve`. CLI approval uses `--approved`.
+- Secrets are configured as environment-variable handles only. Aegis stores names such as `OPENAI_API_KEY` or `SLACK_BOT_TOKEN`, not raw secret values.
 
-- `git`
-- `python3` 3.12 or newer
-- `curl`
-- a POSIX shell such as `sh`, `bash`, or `zsh`
+## Quick Start
 
-Run this in Terminal:
+Install on macOS or Linux:
 
 ```bash
+python3 --version
 /bin/sh -c "$(curl -fsSL https://raw.githubusercontent.com/MatthewLopez1990/AegisAgent/main/scripts/install.sh)"
+command -v aegis
 ```
 
-What that does:
+Start the agent:
 
-- clones the GitHub repo into `~/.aegis-agent`
-- installs the command shim at `~/.local/bin/aegis`
-- keeps the install terminal-only
-- prints the PATH command if `~/.local/bin` is not already on your shell path
+```bash
+aegis
+```
 
-If `aegis` is not found after install, run:
+If your shell cannot find `aegis`, add the install bin directory to your path:
 
 ```bash
 export PATH="$HOME/.local/bin:$PATH"
 ```
 
-Then open a new terminal, or add that export line to `~/.zshrc`, `~/.bashrc`, or your shell profile.
+Add that line to `~/.zshrc`, `~/.bashrc`, or your shell profile, then open a new terminal.
 
-## First Run
+## First Session
 
-After install, start here:
-
-```bash
-aegis setup next
-aegis setup --run-checks
-aegis
-```
-
-`aegis setup next` shows the next concrete setup action. On a fresh install it starts with the model route:
-
-```bash
-aegis setup model
-```
-
-Inside the terminal UI, use the same setup path:
+Inside the TUI, start with:
 
 ```text
 /setup next
+/setup model
 /setup run-checks
 /dashboard
-/capabilities
 ```
 
-You can also type normal requests directly into the composer:
+Then type normal work into the prompt:
 
 ```text
 summarize this workspace
@@ -74,51 +63,118 @@ git status
 run tests
 ```
 
+If you prefer setup outside the TUI:
+
+```bash
+aegis setup next
+aegis setup model
+aegis setup --run-checks
+aegis
+```
+
+`aegis setup next` tells you the next concrete setup action. On a fresh install that is usually the model route. Run checks after you review or configure the concrete setup step.
+
+## Install Details
+
+The installer:
+
+- clones this repo into `~/.aegis-agent`
+- installs the terminal command at `~/.local/bin/aegis`
+- performs the expected GitHub clone and local shim write because you explicitly ran the installer in Terminal
+- keeps install terminal-only; it does not open a browser
+- does not start the web gateway, call model providers, send connector messages, or prompt for raw secrets
+- prints the PATH export for `~/.local/bin`
+
+Prerequisites:
+
+- `git`
+- `python3` 3.12 or newer
+- `curl`
+- a POSIX shell such as `sh`, `bash`, or `zsh`
+
+Optional installer environment variables:
+
+```bash
+AEGIS_INSTALL_DIR="$HOME/.aegis-agent"
+AEGIS_BIN_DIR="$HOME/.local/bin"
+AEGIS_COMMAND_NAME="aegis"
+AEGIS_BRANCH="main"
+AEGIS_REPO_URL="https://github.com/MatthewLopez1990/AegisAgent.git"
+```
+
+## Verify Install
+
+After first setup, verify the installed command:
+
+```bash
+aegis activation
+aegis health
+aegis audit verify
+aegis tui --print --width 100 --height 32
+```
+
 ## Update From GitHub
 
-To update the installed agent from GitHub down to the computer it is running on:
+Update the installed checkout from GitHub:
 
 ```bash
 aegis update --approved
 ```
 
-That command runs a guarded fast-forward pull from `origin/main` inside `~/.aegis-agent`. It refuses to update if the checkout has local changes or if the remote does not match `MatthewLopez1990/AegisAgent`.
+That command performs a guarded fast-forward pull from `origin/main` inside the checkout used by the active `aegis` command. It refuses to update if the checkout has local changes or if the remote does not match `MatthewLopez1990/AegisAgent`.
 
-You can also run the update script directly:
+After updating:
+
+```bash
+aegis health
+aegis audit verify
+```
+
+The direct script is for recovery or debugging only after an installer-created checkout exists. Treat it as manual operator approval because it performs a remote git fetch/pull and refreshes the local shim:
 
 ```bash
 ~/.aegis-agent/scripts/update.sh
 ```
 
-For a source checkout, update with normal git:
+To refresh the local command shim from a source checkout:
 
 ```bash
-git pull --ff-only origin main
-PYTHONPATH=src python3 -m aegisagent health
+PYTHONPATH=src python3 -m aegisagent install shim --approved --bin-dir "$HOME/.local/bin" --name aegis
 ```
 
-## Common Commands
+## Essential Commands
 
-| Command | Use |
+| Command | Purpose |
 | --- | --- |
-| `aegis` | Start the terminal UI in a real terminal, or print activation details outside one. |
-| `aegis activation` | Show terminal startup commands and browser-off safety flags. |
-| `aegis setup next` | Show the next concrete setup step. |
-| `aegis setup model` | Inspect model-provider setup commands. |
-| `aegis setup --run-checks` | Run metadata-only setup verification. |
+| `aegis` | Start the normal terminal agent. |
+| `aegis setup next` | Show the next setup action. |
+| `aegis setup model` | Review or configure the model route. |
+| `aegis setup --run-checks` | Run metadata-only readiness checks. |
 | `aegis health` | Check runtime, audit, sandbox, tools, memory, provider, and connector posture. |
-| `aegis dashboard` | Show the terminal operator dashboard. |
-| `aegis capabilities` | Show implemented and partial capability areas. |
-| `aegis capabilities --gaps` | Show remaining gaps only. |
+| `aegis dashboard` | Show operator status. |
+| `aegis capabilities --gaps` | Show remaining product gaps. |
+| `aegis activation` | Show terminal startup and browser-off safety details. |
 | `aegis update --approved` | Pull the latest GitHub `main` into the installed checkout. |
-| `aegis completion zsh` | Print shell completion for zsh. Also supports `bash` and `fish`. |
-| `aegis tui --print` | Print a static terminal frame for docs, CI, or non-interactive terminals. |
+| `aegis completion zsh` | Print shell completion. Also supports `bash` and `fish`. |
 
-Optional shell completion:
+More examples live in [docs/operator-reference.md](docs/operator-reference.md).
+
+## Shell Completion
+
+Choose one shell and print completion:
+
+```bash
+aegis completion zsh
+aegis completion bash
+aegis completion fish
+```
+
+Install completion for one shell:
 
 ```bash
 aegis completion zsh >> ~/.zshrc
 aegis completion bash >> ~/.bashrc
+mkdir -p ~/.config/fish/completions
 aegis completion fish > ~/.config/fish/completions/aegis.fish
 ```
 
@@ -126,44 +182,78 @@ aegis completion fish > ~/.config/fish/completions/aegis.fish
 
 ```text
 /commands
-/commands completion
 /setup next
 /setup model
-/setup sandbox
-/setup tools
-/setup connectors
 /setup run-checks
 /dashboard
 /capabilities
 /gaps
 /tools
-/audit
-/memory
-/skills
-/sessions search <query>
-/tasks submit <request>
-/tasks bg <request>
-/tasks watch <task-id>
-/agents
-/agents delegate <task>
-/subagents bg <task>
-/automations
-/improve
-/read <path>
 /git status
 /git diff [path]
-/git stage <path> | approve
-/git commit <message> | approve
-/git remote pull origin main | approve
 /test
 /verify
 /web
 /exit
 ```
 
-Approval-gated TUI commands use `| approve`. CLI commands use `--approved`. This is intentional: network calls, writes, git mutations, browser records, external delivery, and elevated actions should be explicit operator choices.
+Approval-gated TUI commands use `| approve`. CLI commands use `--approved`.
 
-## Source Checkout
+Examples:
+
+```text
+/git stage README.md | approve
+/git commit Update README | approve
+/git remote pull origin main | approve
+```
+
+## Security Model
+
+AegisAgent fails closed for destructive commands and secret echo.
+
+- Read-only local inspection, such as `/read`, `aegis git status`, and `aegis git diff`, can run without approval.
+- Explicit approval is required for workspace writes, shell mutations, network fetches, browser session or screenshot records, external delivery, connector sends, elevated actions, unrecognized tools, git stage/commit/branch, git remote fetch/pull/push, and `aegis update`.
+- TUI approval uses `| approve`. CLI approval uses `--approved`.
+- Setup and config commands may write Aegis metadata, but secrets are stored as environment-variable handles only.
+- Raw secret values must not be written to Aegis config, connector metadata, examples, prompts, task text, or audit notes.
+- Audit payloads are redacted before persistence, and `aegis audit verify` checks the chained receipt hash.
+
+Configure secret handles like this:
+
+```bash
+aegis model configure openai/gpt-5.5 --mode api_key --api-key-env OPENAI_API_KEY
+aegis connectors configure slack --token-env SLACK_BOT_TOKEN --enable
+```
+
+## Optional Web Console
+
+The web console is not required for install, setup, update, health checks, or normal agent work.
+
+Preview the web instructions:
+
+```bash
+aegis web
+```
+
+Start the local gateway only when you explicitly want it:
+
+```bash
+python3 -m pip install -e '.[gateway]'
+aegis web --serve --approved --host 127.0.0.1 --port 8787
+```
+
+In another terminal, run the web frontend:
+
+```bash
+cd ~/.aegis-agent
+cd web
+npm install
+npm run dev -- --port 5173
+```
+
+`aegis web` is preview-only. `aegis web --serve --approved` starts the local gateway after explicit approval and still does not launch a browser.
+
+## Source Checkout For Development
 
 Use this path if you are developing AegisAgent instead of installing the user command:
 
@@ -171,14 +261,6 @@ Use this path if you are developing AegisAgent instead of installing the user co
 git clone https://github.com/MatthewLopez1990/AegisAgent.git
 cd AegisAgent
 PYTHONPATH=src python3 -m aegisagent
-```
-
-Optional editable install:
-
-```bash
-python3 -m pip install -e .
-aegis
-aegisagent
 ```
 
 Source-checkout commands:
@@ -190,112 +272,28 @@ PYTHONPATH=src python3 -m aegisagent setup --run-checks
 PYTHONPATH=src python3 -m aegisagent tui
 ```
 
-## Optional Web Console
-
-The web console is not required for install, setup, update, health checks, or normal agent work.
-
-Start it only when you explicitly want the browser UI:
-
-```bash
-python3 -m pip install -e '.[gateway]'
-aegis web
-aegis web --serve --approved --host 127.0.0.1 --port 8787
-```
-
-In another terminal:
-
-```bash
-cd web
-npm install
-npm run dev -- --port 5173
-```
-
-`aegis web` is preview-only. It prints the web commands and does not start a server or open a browser. `aegis web --serve --approved` starts the local gateway only after explicit approval; it still does not launch a browser.
-
-## More CLI Examples
-
-Model and connector metadata:
-
-```bash
-aegis model providers
-aegis model configure openai/gpt-5.5 --mode api_key --api-key-env OPENAI_API_KEY
-aegis model doctor
-aegis model usage
-aegis connectors
-aegis connectors configure slack --token-env SLACK_BOT_TOKEN --enable
-aegis connectors doctor
-```
-
-Tasks, agents, and subagents:
-
-```bash
-aegis chat "summarize this workspace"
-aegis tasks --submit "draft a safe plan"
-aegis tasks --background "draft a safe plan"
-aegis agents
-aegis agents profiles
-aegis agents contracts
-aegis agents delegate "review the current plan"
-aegis subagents --delegate "review the current plan"
-```
-
-Governed workspace tools:
-
-```bash
-aegis fetch https://example.com --approved
-aegis browser open https://example.com --approved
-aegis git stage <path> --approved
-aegis git commit --message "Describe staged changes" --approved
-aegis git branch create codex/example --approved
-aegis git remote fetch origin main --approved
-aegis git remote pull origin main --approved
-aegis git remote push origin main --approved
-aegis edit replace README.md --old "old text" --new "new text" --approved
-```
-
-Automations and self-improvement:
-
-```bash
-aegis automations
-aegis automations create daily-check --schedule "daily 09:00" --prompt "summarize workspace risks"
-aegis automations due
-aegis automations missed
-aegis automations replay-missed
-aegis automations worker --max-ticks 5
-aegis improve
-aegis improve propose "policy denied a needed safe git read" --target policy --operation evaluate
-aegis improve candidate <proposal-id>
-aegis improve verify <candidate-id>
-aegis improve apply <candidate-id>
-```
-
-## Verify A Source Checkout
-
-Backend tests:
+Verify a source checkout:
 
 ```bash
 PYTHONPATH=src python3 -Wd -m unittest discover -s tests -v
-```
-
-Terminal checks:
-
-```bash
 PYTHONPATH=src python3 -m aegisagent health
 PYTHONPATH=src python3 -m aegisagent audit verify
 PYTHONPATH=src python3 -m aegisagent tui --print --width 100 --height 32
+cd web && npm run verify
 ```
 
-Web checks:
+Update a source checkout with normal git:
 
 ```bash
-cd web
-npm run verify
+git pull --ff-only origin main
+PYTHONPATH=src python3 -m aegisagent health
+PYTHONPATH=src python3 -m aegisagent audit verify
 ```
-
-## Security Contract
-
-AegisAgent fails closed for destructive commands and secret echo. Network calls, shell writes, external delivery, elevated actions, browser actions, and unrecognized tool calls require explicit approval. Audit payloads are redacted before persistence, and `aegis audit verify` checks the chained receipt hash.
 
 ## Current Status
 
-AegisAgent is still an early terminal-first foundation, not a complete Hermes-class agent. The implemented surface includes install/update lifecycle, terminal activation, TUI, setup checks, health checks, policy/audit receipts, typed workspace tools, governed git operations, task queues, automations, model-route metadata, connector metadata, and local agent/subagent orchestration. Remaining work includes deeper live browser control, richer model-backed multi-agent execution, broader integrations, and stronger packaged release flows.
+AegisAgent is still an early terminal-first foundation, not a complete Hermes-class agent.
+
+- Implemented: install/update lifecycle, terminal activation, TUI, setup checks, health checks, policy/audit receipts, typed workspace tools, governed git operations, task queues, automations, model-route metadata, connector metadata, and local agent/subagent orchestration.
+- Partial: web console parity, external model routing, connectors, self-improvement, and agent delegation depth.
+- Next: deeper live browser control, richer model-backed multi-agent execution, broader integrations, and stronger packaged release flows.
