@@ -678,6 +678,44 @@ class CliTests(unittest.TestCase):
             self.assertIn('"memory_write_performed": true', audit)
             self.assertIn('"browser_auto_launch": false', audit)
 
+    def test_memory_list_show_delete_cli_are_approval_gated_and_redacted(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            raw_secret = "sk-abcdefghijklmnopqrstuvwxyz123456"
+            user_memory = Path(tmp) / ".aegisagent" / "memory" / "USER.md"
+            applied = run_cli("memory", "--kind", "user", "--title", f"Token {raw_secret}", "--add", f"Body token={raw_secret}", "--approved", cwd=tmp)
+            self.assertEqual(applied.returncode, 0, applied.stderr)
+
+            listing = run_cli("memory", "list", "--kind", "user", cwd=tmp)
+            self.assertEqual(listing.returncode, 0, listing.stderr)
+            list_payload = json.loads(listing.stdout)
+            entry_id = list_payload["entries"][0]["id"]
+            self.assertRegex(entry_id, r"^user:[a-f0-9]{12}$")
+            self.assertNotIn(raw_secret, listing.stdout)
+
+            shown = run_cli("memory", "show", entry_id, cwd=tmp)
+            self.assertEqual(shown.returncode, 0, shown.stderr)
+            self.assertIn("[REDACTED]", shown.stdout)
+            self.assertNotIn(raw_secret, shown.stdout)
+
+            preview = run_cli("memory", "delete", entry_id, cwd=tmp)
+            self.assertEqual(preview.returncode, 1)
+            self.assertEqual(json.loads(preview.stdout)["status"], "needs_approval")
+            self.assertIn("[REDACTED]", user_memory.read_text(encoding="utf-8"))
+
+            deleted = run_cli("memory", "delete", entry_id, "--approved", cwd=tmp)
+            self.assertEqual(deleted.returncode, 0, deleted.stderr)
+            deleted_payload = json.loads(deleted.stdout)
+            self.assertEqual(deleted_payload["status"], "ok")
+            self.assertTrue(deleted_payload["metadata"]["memory_write_performed"])
+            self.assertTrue(deleted_payload["metadata"]["workspace_mutation_performed"])
+            self.assertFalse(deleted_payload["metadata"]["browser_auto_launch"])
+            self.assertFalse(json.loads(run_cli("memory", "list", "--kind", "user", cwd=tmp).stdout)["entries"])
+            audit = (Path(tmp) / ".aegisagent" / "audit.jsonl").read_text(encoding="utf-8")
+            self.assertIn("memory.note.delete", audit)
+            self.assertIn('"memory_write_performed": true', audit)
+            self.assertIn('"browser_auto_launch": false', audit)
+            self.assertNotIn(raw_secret, audit)
+
     def test_edit_replace_is_approval_gated_typed_workspace_mutation(self):
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp) / "note.txt"

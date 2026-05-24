@@ -34,6 +34,9 @@ aegis update --approved
 /tools
 /audit
 /memory
+/memory list
+/memory show <entry-id>
+/memory delete <entry-id> | approve
 /skills
 /sessions search <query>
 /tasks submit <request>
@@ -80,6 +83,20 @@ aegis agents profiles
 aegis agents contracts
 aegis agents delegate "review the current plan"
 aegis subagents --delegate "review the current plan"
+```
+
+## Memory Review
+
+List/show/search/index are read-only. Add and delete require explicit approval.
+
+```bash
+aegis memory list
+aegis memory list --kind user
+aegis memory show <entry-id>
+aegis memory --query <text>
+aegis memory --index
+aegis memory --kind user --title "<title>" --add "<body>" --approved
+aegis memory delete <entry-id> --approved
 ```
 
 ## Governed Workspace Tools

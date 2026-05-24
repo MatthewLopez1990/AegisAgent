@@ -1,3 +1,4 @@
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -51,6 +52,61 @@ class MemorySkillsSubagentTests(unittest.TestCase):
             self.assertTrue(applied["metadata"]["memory_write_performed"])
             self.assertIn("Terminal preference", user_memory.read_text(encoding="utf-8"))
             self.assertTrue(store.search("terminal-first"))
+
+    def test_curated_memory_entries_list_show_delete_with_redaction(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = runtime_paths(tmp)
+            store = MemoryStore(paths)
+            raw_secret = "sk-abcdefghijklmnopqrstuvwxyz123456"
+            applied = store.add_curated_note("user", f"Token {raw_secret}", f"Body token={raw_secret}", approved=True)
+
+            self.assertEqual(applied["status"], "ok")
+            user_memory = paths.memory_dir / "USER.md"
+            self.assertNotIn(raw_secret, user_memory.read_text(encoding="utf-8"))
+            listing = store.list_curated_entries(kind="user")
+            self.assertEqual(listing["status"], "ok")
+            entry_id = listing["entries"][0]["id"]
+            self.assertRegex(entry_id, r"^user:[a-f0-9]{12}$")
+            self.assertNotIn(raw_secret, json.dumps(listing))
+            shown = store.show_curated_entry(entry_id)
+            self.assertEqual(shown["status"], "ok")
+            self.assertIn("[REDACTED]", shown["entry"]["body"])
+            self.assertNotIn(raw_secret, json.dumps(shown))
+
+            preview = store.delete_curated_entry(entry_id)
+            self.assertEqual(preview["status"], "needs_approval")
+            self.assertIn("[REDACTED]", user_memory.read_text(encoding="utf-8"))
+
+            deleted = store.delete_curated_entry(entry_id, approved=True)
+            self.assertEqual(deleted["status"], "ok")
+            self.assertTrue(deleted["metadata"]["memory_write_performed"])
+            self.assertTrue(deleted["metadata"]["workspace_mutation_performed"])
+            self.assertFalse(deleted["metadata"]["browser_auto_launch"])
+            self.assertFalse(store.list_curated_entries(kind="user")["entries"])
+            self.assertFalse(store.search("token"))
+
+            heading_note = store.add_curated_note("workspace", "Parent note", "Body line\n## Body heading\nStill body", approved=True)
+            self.assertEqual(heading_note["status"], "ok")
+            entries = store.list_curated_entries(kind="workspace")["entries"]
+            self.assertEqual(len(entries), 1)
+            self.assertEqual(entries[0]["title"], "Parent note")
+
+    def test_curated_memory_writes_block_symlink_targets(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = runtime_paths(tmp)
+            MemoryStore(paths)
+            outside = Path(tmp) / "outside.md"
+            outside.write_text("outside\n", encoding="utf-8")
+            target = paths.memory_dir / "USER.md"
+            target.unlink()
+            target.symlink_to(outside)
+
+            store = MemoryStore(paths)
+            result = store.add_curated_note("user", "Unsafe", "Should not escape", approved=True)
+
+            self.assertEqual(result["status"], "blocked")
+            self.assertIn("regular file inside the memory directory", result["error"])
+            self.assertEqual(outside.read_text(encoding="utf-8"), "outside\n")
 
     def test_skill_loader_quarantines_risky_skill(self):
         with tempfile.TemporaryDirectory() as tmp:

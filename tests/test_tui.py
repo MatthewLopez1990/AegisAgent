@@ -11,6 +11,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from aegisagent.config import runtime_paths
+from aegisagent.core.memory import MemoryStore
 from aegisagent.core.setup_state import setup_wizard_preferences
 from aegisagent.core.subagents import BackgroundJobStore
 from aegisagent.core.tasks import TaskRunner, TaskStore
@@ -227,6 +228,10 @@ class TuiRendererTests(unittest.TestCase):
         self.assertTrue(any(command == "/verify" for command, _detail in verify_matches))
         command_matches = slash_palette_candidates("/com")
         self.assertTrue(any(command == "/commands" for command, _detail in command_matches))
+        memory_matches = slash_palette_candidates("/memory")
+        self.assertTrue(any(command == "/memory list" for command, _detail in memory_matches))
+        self.assertTrue(any(command == "/memory show" for command, _detail in memory_matches))
+        self.assertTrue(any(command == "/memory delete" for command, _detail in memory_matches))
         dashboard_matches = slash_palette_candidates("/dash")
         self.assertTrue(any(command == "/dashboard" for command, _detail in dashboard_matches))
         install_matches = slash_palette_candidates("/inst")
@@ -576,6 +581,57 @@ class TuiRendererTests(unittest.TestCase):
             self.assertIn("memory.note.add", audit)
             self.assertIn('"memory_write_performed": true', audit)
             self.assertIn('"browser_auto_launch": false', audit)
+
+    def test_interactive_dispatch_memory_list_show_delete_are_approval_gated_and_redacted(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = runtime_paths(tmp)
+            raw_secret = "sk-abcdefghijklmnopqrstuvwxyz123456"
+            add_output = io.StringIO()
+
+            with contextlib.redirect_stdout(add_output):
+                result = dispatch_interactive_command(f"/memory add user | Token {raw_secret} | Body token={raw_secret} | approve", paths)
+
+            self.assertEqual(result, "memory")
+            self.assertNotIn(raw_secret, add_output.getvalue())
+
+            listing = io.StringIO()
+            with contextlib.redirect_stdout(listing):
+                result = dispatch_interactive_command("/memory list user", paths)
+
+            self.assertEqual(result, "memory")
+            list_payload = json.loads(listing.getvalue())
+            entry_id = list_payload["entries"][0]["id"]
+            self.assertRegex(entry_id, r"^user:[a-f0-9]{12}$")
+            self.assertNotIn(raw_secret, listing.getvalue())
+
+            shown = io.StringIO()
+            with contextlib.redirect_stdout(shown):
+                result = dispatch_interactive_command(f"/memory show {entry_id}", paths)
+
+            self.assertEqual(result, "memory")
+            self.assertIn("[REDACTED]", shown.getvalue())
+            self.assertNotIn(raw_secret, shown.getvalue())
+
+            preview = io.StringIO()
+            with contextlib.redirect_stdout(preview):
+                result = dispatch_interactive_command(f"/memory delete {entry_id}", paths)
+
+            self.assertEqual(result, "memory")
+            self.assertIn('"status": "needs_approval"', preview.getvalue())
+            self.assertIn("[REDACTED]", (paths.memory_dir / "USER.md").read_text(encoding="utf-8"))
+
+            deleted = io.StringIO()
+            with contextlib.redirect_stdout(deleted):
+                result = dispatch_interactive_command(f"/memory delete {entry_id} | approve", paths)
+
+            self.assertEqual(result, "memory")
+            self.assertIn('"status": "ok"', deleted.getvalue())
+            self.assertFalse(MemoryStore(paths).list_curated_entries(kind="user")["entries"])
+            audit = (paths.state_dir / "audit.jsonl").read_text(encoding="utf-8")
+            self.assertIn("memory.note.delete", audit)
+            self.assertIn('"memory_write_performed": true', audit)
+            self.assertIn('"browser_auto_launch": false', audit)
+            self.assertNotIn(raw_secret, audit)
 
     def test_interactive_dispatch_web_fetch_requires_approval(self):
         with tempfile.TemporaryDirectory() as tmp:

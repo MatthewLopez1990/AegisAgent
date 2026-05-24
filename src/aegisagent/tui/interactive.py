@@ -156,6 +156,9 @@ SLASH_COMMANDS: tuple[tuple[str, str], ...] = (
     ("/connectors", "show connector readiness metadata"),
     ("/connectors doctor", "run metadata-only connector checks"),
     ("/memory", "index and search local memory"),
+    ("/memory list", "list curated memory entries"),
+    ("/memory show", "show one curated memory entry"),
+    ("/memory delete", "delete one curated memory entry after approval"),
     ("/memory add", "append a governed note to curated memory after approval"),
     ("/skills", "scan workspace skill folders"),
     ("/read", "read a workspace file through a typed non-shell tool"),
@@ -285,6 +288,9 @@ COMMAND_MENU_GROUPS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
             ("/connectors", "show connector readiness metadata"),
             ("/connectors doctor", "run metadata-only connector checks"),
             ("/memory", "index and search local memory"),
+            ("/memory list", "review curated memory entries"),
+            ("/memory show <entry-id>", "inspect redacted curated memory"),
+            ("/memory delete <entry-id> | approve", "approval-gated curated memory delete"),
             ("/memory add <workspace|user> | <title> | <body> | approve", "approval-gated curated memory write"),
             ("/skills", "scan workspace skill folders"),
             ("/web", "print optional browser GUI launch command"),
@@ -871,7 +877,7 @@ class _CursesAegisAgent:
             self.message = "No slash command matches."
             return
         command = palette[min(self.palette_index, len(palette) - 1)][0]
-        self.input_buffer = command + (" " if command in {"/policy shell", "/read", "/git diff", "/git stage", "/git commit", "/git branch", "/git remote", "/edit replace", "/test", "/verify", "/sessions search", "/submit", "/add-dir", "/memory add", "/web fetch", "/browser open", "/browser screenshot", "/tasks submit", "/tasks bg", "/tasks run", "/tasks start", "/tasks events", "/tasks output", "/tasks logs", "/tasks watch", "/tasks cancel", "/automations create", "/automations trigger", "/automations pause", "/automations resume", "/automations delete", "/improve propose", "/improve approve", "/improve implement", "/improve handoff", "/improve candidate", "/improve diff", "/improve verify", "/improve apply", "/improve evidence", "/improve complete", "/improve reject", "/subagents bg", "/subagents live", "/subagents monitor", "/subagents cancel", "/agents delegate", "/agents bg", "/agents live", "/agents monitor", "/agents cancel", "/q"} else "")
+        self.input_buffer = command + (" " if command in {"/policy shell", "/read", "/git diff", "/git stage", "/git commit", "/git branch", "/git remote", "/edit replace", "/test", "/verify", "/sessions search", "/submit", "/add-dir", "/memory add", "/memory show", "/memory delete", "/web fetch", "/browser open", "/browser screenshot", "/tasks submit", "/tasks bg", "/tasks run", "/tasks start", "/tasks events", "/tasks output", "/tasks logs", "/tasks watch", "/tasks cancel", "/automations create", "/automations trigger", "/automations pause", "/automations resume", "/automations delete", "/improve propose", "/improve approve", "/improve implement", "/improve handoff", "/improve candidate", "/improve diff", "/improve verify", "/improve apply", "/improve evidence", "/improve complete", "/improve reject", "/subagents bg", "/subagents live", "/subagents monitor", "/subagents cancel", "/agents delegate", "/agents bg", "/agents live", "/agents monitor", "/agents cancel", "/q"} else "")
         self.cursor = len(self.input_buffer)
         self.message = f"Completed {command}; add args or press Enter."
 
@@ -1216,6 +1222,60 @@ def dispatch_interactive_command(command: str, paths: RuntimePaths) -> str:
             result = MemoryStore(paths).add_curated_note(parts[0], parts[1], parts[2], approved=approved)
             receipt = audit.append(
                 "memory.note.add",
+                {
+                    "status": result["status"],
+                    "metadata": result.get("metadata", {}),
+                    "external_action_started": False,
+                    "browser_auto_launch": False,
+                },
+            )
+            print_json({**result, "receipt": receipt["id"]})
+        return "memory"
+    if _slash_invoked(command, "/memory list") or _slash_invoked(command, "/memory review"):
+        raw = _slash_remainder(command, "/memory list") if _slash_invoked(command, "/memory list") else _slash_remainder(command, "/memory review")
+        tokens = raw.split()
+        kind = tokens[0] if tokens and tokens[0] in {"workspace", "user"} else ""
+        result = MemoryStore(paths).list_curated_entries(kind=kind, limit=50)
+        audit.append(
+            "memory.note.list",
+            {
+                "status": result["status"],
+                "metadata": result.get("metadata", {}),
+                "external_action_started": False,
+                "browser_auto_launch": False,
+            },
+        )
+        print_json(result)
+        return "memory"
+    if _slash_invoked(command, "/memory show"):
+        entry_id = _slash_remainder(command, "/memory show")
+        if not entry_id:
+            print("Usage: /memory show <entry-id>")
+        else:
+            result = MemoryStore(paths).show_curated_entry(entry_id)
+            audit.append(
+                "memory.note.show",
+                {
+                    "status": result["status"],
+                    "metadata": result.get("metadata", {}),
+                    "entry": {key: value for key, value in result.get("entry", {}).items() if key != "body"},
+                    "external_action_started": False,
+                    "browser_auto_launch": False,
+                },
+            )
+            print_json(result)
+        return "memory"
+    if _slash_invoked(command, "/memory delete"):
+        raw = _slash_remainder(command, "/memory delete")
+        parts = [part.strip() for part in raw.split("|", 1)]
+        approved = len(parts) == 2 and parts[1].lower() in {"approve", "approved", "yes"}
+        entry_id = parts[0]
+        if not entry_id:
+            print("Usage: /memory delete <entry-id> | approve")
+        else:
+            result = MemoryStore(paths).delete_curated_entry(entry_id, approved=approved)
+            receipt = audit.append(
+                "memory.note.delete",
                 {
                     "status": result["status"],
                     "metadata": result.get("metadata", {}),

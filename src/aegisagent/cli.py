@@ -103,8 +103,11 @@ def build_parser() -> argparse.ArgumentParser:
     memory.add_argument("--query", default="")
     memory.add_argument("--add", default="", help="Append an approval-gated note to curated memory.")
     memory.add_argument("--title", default="", help="Title for --add memory notes.")
-    memory.add_argument("--kind", choices=["workspace", "user"], default="workspace", help="Curated memory file to update for --add.")
+    memory.add_argument("--kind", choices=["workspace", "user"], default="", help="Curated memory file to update or list.")
     memory.add_argument("--approved", action="store_true", help="Append the memory note after explicit operator approval.")
+    memory.add_argument("--limit", type=int, default=20, help="Limit memory list or search results.")
+    memory.add_argument("memory_command", nargs="?", choices=["list", "show", "delete"], help="Review or delete curated memory entries.")
+    memory.add_argument("memory_args", nargs="*", help="Memory entry id, for example user:abcdef123456.")
 
     sessions = sub.add_parser("sessions", help="Manage terminal sessions.")
     sessions.add_argument("--create", metavar="TITLE", help="Create a named session.")
@@ -389,9 +392,53 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "memory":
         store = MemoryStore(paths)
         if args.add:
-            result = store.add_curated_note(args.kind, args.title, args.add, approved=args.approved)
+            result = store.add_curated_note(args.kind or "workspace", args.title, args.add, approved=args.approved)
             audit.append(
                 "memory.note.add",
+                {
+                    "status": result["status"],
+                    "metadata": result.get("metadata", {}),
+                    "external_action_started": False,
+                    "browser_auto_launch": False,
+                },
+            )
+            print(json.dumps(result, indent=2))
+            return 0 if result["status"] == "ok" else 1
+        if args.memory_command == "list":
+            result = store.list_curated_entries(kind=args.kind, limit=args.limit)
+            audit.append(
+                "memory.note.list",
+                {
+                    "status": result["status"],
+                    "metadata": result.get("metadata", {}),
+                    "external_action_started": False,
+                    "browser_auto_launch": False,
+                },
+            )
+            print(json.dumps(result, indent=2))
+            return 0 if result["status"] == "ok" else 1
+        if args.memory_command == "show":
+            if not args.memory_args:
+                parser.error("memory show requires an entry id, for example user:abcdef123456")
+            result = store.show_curated_entry(args.memory_args[0])
+            audit.append(
+                "memory.note.show",
+                {
+                    "status": result["status"],
+                    "metadata": result.get("metadata", {}),
+                    "entry": {key: value for key, value in result.get("entry", {}).items() if key != "body"},
+                    "external_action_started": False,
+                    "browser_auto_launch": False,
+                },
+            )
+            print(json.dumps(result, indent=2))
+            return 0 if result["status"] == "ok" else 1
+        if args.memory_command == "delete":
+            if not args.memory_args:
+                parser.error("memory delete requires an entry id, for example user:abcdef123456")
+            result = store.delete_curated_entry(args.memory_args[0], approved=args.approved)
+            audit.append(
+                "memory.note.delete",
                 {
                     "status": result["status"],
                     "metadata": result.get("metadata", {}),
@@ -405,7 +452,7 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps({"indexed": store.index_curated_files()}, indent=2))
         else:
             query = args.query or "AegisAgent"
-            print(json.dumps(store.search(query), indent=2))
+            print(json.dumps(store.search(query, limit=args.limit), indent=2))
         return 0
 
     if args.command == "sessions":

@@ -153,6 +153,8 @@ PYTHONPATH=src python3 -m aegisagent install shim --approved --bin-dir "$HOME/.l
 | `aegis health` | Check runtime, audit, sandbox, tools, memory, provider, and connector posture. |
 | `aegis dashboard` | Show operator status. |
 | `aegis capabilities --gaps` | Show remaining product gaps. |
+| `aegis memory list` | List curated memory entries. |
+| `aegis memory show <entry-id>` | Inspect one redacted curated memory entry. |
 | `aegis activation` | Show terminal startup and browser-off safety details. |
 | `aegis update --approved` | Pull the latest GitHub `main` into the installed checkout. |
 | `aegis completion zsh` | Print shell completion. Also supports `bash` and `fish`. |
@@ -189,6 +191,9 @@ aegis completion fish > ~/.config/fish/completions/aegis.fish
 /capabilities
 /gaps
 /tools
+/memory list
+/memory show <entry-id>
+/memory delete <entry-id> | approve
 /git status
 /git diff [path]
 /test
