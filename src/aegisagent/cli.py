@@ -267,10 +267,14 @@ def build_parser() -> argparse.ArgumentParser:
     subagents.add_argument("--artifacts", action="store_true", help="List durable subagent role artifacts.")
     subagents.add_argument("--artifact", metavar="ARTIFACT_ID", help="Show one durable subagent role artifact.")
     subagents.add_argument("--artifact-search", metavar="QUERY", help="Search durable subagent role artifacts.")
+    subagents.add_argument("--use-artifact", action="append", default=[], help="Approved prior artifact id to reuse as starting context for --delegate or --stream.")
+    subagents.add_argument("--approved", action="store_true", help="Approve cross-delegation artifact reuse.")
 
     agents = sub.add_parser("agents", help="Hermes-style agent surface backed by governed local subagents.")
     agents.add_argument("agent_command", nargs="?", default="status", choices=["status", "profiles", "contracts", "delegate", "stream", "background", "bg", "jobs", "job", "monitor", "cancel", "recover", "artifacts", "artifact", "search-artifacts"], help="Agent command to run.")
     agents.add_argument("agent_args", nargs="*", help="Task text, job id, or root id for the selected agent command.")
+    agents.add_argument("--use-artifact", action="append", default=[], help="Approved prior artifact id to reuse as starting context for delegate or stream.")
+    agents.add_argument("--approved", action="store_true", help="Approve cross-delegation artifact reuse.")
     agents.add_argument("--json", action="store_true", default=argparse.SUPPRESS, help="Emit JSON for status, profiles, and artifact browsing.")
 
     tui = sub.add_parser("tui", help="Launch governed terminal TUI. This is the primary activation path.")
@@ -1119,14 +1123,22 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "subagents":
         orchestrator = LocalSubagentOrchestrator(paths)
         if args.delegate:
-            result = orchestrator.delegate(args.delegate)
+            try:
+                result = orchestrator.delegate(args.delegate, reusable_artifact_ids=args.use_artifact, reuse_approved=args.approved)
+            except (KeyError, ValueError) as exc:
+                parser.error(str(exc))
             print(json.dumps(result.to_dict(), indent=2))
         elif args.stream:
             print("SUBAGENT LIVE")
-            result = orchestrator.delegate(args.stream, event_sink=lambda event: print(format_event_line(event), flush=True))
+            try:
+                result = orchestrator.delegate(args.stream, reusable_artifact_ids=args.use_artifact, reuse_approved=args.approved, event_sink=lambda event: print(format_event_line(event), flush=True))
+            except (KeyError, ValueError) as exc:
+                parser.error(str(exc))
             print("")
             print(json.dumps({"root_id": result.root.id, "receipt_id": result.receipt_id, "status": result.root.status}, indent=2))
         elif args.background:
+            if args.use_artifact:
+                parser.error("--use-artifact is only supported for --delegate and --stream")
             record = orchestrator.start_background(args.background)
             print(json.dumps(record.to_dict(), indent=2))
         elif args.run_job:
@@ -1205,17 +1217,26 @@ def main(argv: list[str] | None = None) -> int:
         elif command == "delegate":
             if not agent_args:
                 parser.error("agents delegate requires a task")
-            print(json.dumps(orchestrator.delegate(agent_args).to_dict(), indent=2))
+            try:
+                result = orchestrator.delegate(agent_args, reusable_artifact_ids=args.use_artifact, reuse_approved=args.approved)
+            except (KeyError, ValueError) as exc:
+                parser.error(str(exc))
+            print(json.dumps(result.to_dict(), indent=2))
         elif command == "stream":
             if not agent_args:
                 parser.error("agents stream requires a task")
             print("AGENTS LIVE")
-            result = orchestrator.delegate(agent_args, event_sink=lambda event: print(format_event_line(event), flush=True))
+            try:
+                result = orchestrator.delegate(agent_args, reusable_artifact_ids=args.use_artifact, reuse_approved=args.approved, event_sink=lambda event: print(format_event_line(event), flush=True))
+            except (KeyError, ValueError) as exc:
+                parser.error(str(exc))
             print("")
             print(json.dumps({"root_id": result.root.id, "receipt_id": result.receipt_id, "status": result.root.status}, indent=2))
         elif command in {"background", "bg"}:
             if not agent_args:
                 parser.error(f"agents {command} requires a task")
+            if args.use_artifact:
+                parser.error("--use-artifact is only supported for agents delegate and agents stream")
             print(json.dumps(orchestrator.start_background(agent_args).to_dict(), indent=2))
         elif command == "jobs":
             print(json.dumps({"jobs": orchestrator.background_jobs()}, indent=2))

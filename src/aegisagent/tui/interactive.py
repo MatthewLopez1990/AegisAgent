@@ -210,7 +210,7 @@ SLASH_COMMANDS: tuple[tuple[str, str], ...] = (
     ("/subagents artifacts", "list durable role artifacts"),
     ("/subagents artifacts show", "show one durable role artifact"),
     ("/subagents artifacts search", "search durable role artifacts"),
-    ("/subagents live", "delegate and stream local worker progress"),
+    ("/subagents live", "delegate and stream local worker progress; add | use-artifact <id> | approve to reuse approved context"),
     ("/subagents bg", "start background subagent work and keep composer usable"),
     ("/subagents monitor", "live repaint background subagent job progress"),
     ("/subagents unwatch", "stop the active subagent job monitor"),
@@ -218,11 +218,11 @@ SLASH_COMMANDS: tuple[tuple[str, str], ...] = (
     ("/agents", "show Hermes-style agent status backed by local subagents"),
     ("/agents profiles", "show planner/researcher/implementer/reviewer profiles"),
     ("/agents contracts", "show role context contracts, deliverables, and budgets"),
-    ("/agents delegate", "run bounded local planner/researcher/implementer/reviewer agents"),
+    ("/agents delegate", "run bounded local planner/researcher/implementer/reviewer agents; add | use-artifact <id> | approve to reuse approved context"),
     ("/agents artifacts", "list durable role artifacts"),
     ("/agents artifacts show", "show one durable role artifact"),
     ("/agents artifacts search", "search durable role artifacts"),
-    ("/agents live", "delegate and stream Hermes-style local agent progress"),
+    ("/agents live", "delegate and stream Hermes-style local agent progress; add | use-artifact <id> | approve to reuse approved context"),
     ("/agents stream", "alias for /agents live"),
     ("/agents bg", "start background agent work and keep composer usable"),
     ("/agents jobs", "list background agent jobs"),
@@ -409,6 +409,7 @@ COMMAND_MENU_GROUPS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
             ("/subagents artifacts show <artifact-id>", "show one durable role artifact"),
             ("/subagents artifacts search <query>", "search durable role artifacts"),
             ("/subagents live <task>", "delegate and stream bounded workers"),
+            ("/subagents live <task> | use-artifact <id> | approve", "delegate and stream bounded workers with approved prior context"),
             ("/subagents bg <task>", "start background subagent work"),
             ("/subagents monitor <job-id>", "live repaint background subagent progress"),
             ("/subagents unwatch", "stop active subagent job monitor"),
@@ -416,6 +417,7 @@ COMMAND_MENU_GROUPS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
             ("/agents", "show Hermes-style agent status"),
             ("/agents contracts", "show role context contracts and budgets"),
             ("/agents delegate <task>", "delegate to named local agent profiles"),
+            ("/agents delegate <task> | use-artifact <id> | approve", "delegate to named local agent profiles with approved prior context"),
             ("/agents artifacts", "list durable role artifacts"),
             ("/agents artifacts show <artifact-id>", "show one durable role artifact"),
             ("/agents artifacts search <query>", "search durable role artifacts"),
@@ -861,6 +863,7 @@ class _CursesAegisAgent:
         self.message = f"Opened: {normalized}"
 
     def _run_live_subagents(self, task: str, *, command: str = "/subagents live") -> None:
+        task, artifact_ids, approved = _parse_artifact_reuse_directive(task)
         if not task:
             self.output_lines = [f"$ {command}", "", f"Usage: {command} <task>"]
             self.message = "Add a task to stream agent work."
@@ -874,7 +877,13 @@ class _CursesAegisAgent:
             self.output_lines.append(format_event_line(event))
             self._render()
 
-        result = LocalSubagentOrchestrator(self.paths).delegate(task, event_sink=sink)
+        try:
+            result = LocalSubagentOrchestrator(self.paths).delegate(task, reusable_artifact_ids=artifact_ids, reuse_approved=approved, event_sink=sink)
+        except (KeyError, ValueError) as exc:
+            self.output_lines = [f"$ {command}", "", f"Delegation blocked: {exc}"]
+            self.message = "Delegation blocked."
+            self._render()
+            return
         self.output_lines.extend(["", f"root      {result.root.id}  {result.root.status}", f"receipt   {result.receipt_id}"])
         self.message = f"Agents completed: {result.root.id}"
         self._render()
@@ -1038,6 +1047,27 @@ class _CursesAegisAgent:
             return self.curses.color_pair(number)
         except Exception:
             return 0
+
+
+def _parse_artifact_reuse_directive(raw: str) -> tuple[str, list[str], bool]:
+    parts = [part.strip() for part in raw.split("|")]
+    prompt = parts[0].strip() if parts else ""
+    artifact_ids: list[str] = []
+    approved = False
+    for part in parts[1:]:
+        lowered = part.lower()
+        if lowered in {"approve", "approved"}:
+            approved = True
+            continue
+        if lowered.startswith("use-artifact ") or lowered.startswith("artifact ") or lowered.startswith("artifacts "):
+            values = part.split(maxsplit=1)[1] if " " in part else ""
+            artifact_ids.extend(item.strip() for item in values.replace(",", " ").split() if item.strip())
+    return prompt, list(dict.fromkeys(artifact_ids)), approved
+
+
+def _delegate_with_reuse(orchestrator: LocalSubagentOrchestrator, task: str) -> Any:
+    prompt, artifact_ids, approved = _parse_artifact_reuse_directive(task)
+    return orchestrator.delegate(prompt, reusable_artifact_ids=artifact_ids, reuse_approved=approved)
 
 
 def dispatch_interactive_command(command: str, paths: RuntimePaths) -> str:
@@ -1787,7 +1817,11 @@ def dispatch_interactive_command(command: str, paths: RuntimePaths) -> str:
         elif task.startswith("cancel "):
             print(format_background_job(orchestrator.cancel_background(task.removeprefix("cancel ").strip())))
         elif task.startswith("live "):
-            result = orchestrator.delegate(task.removeprefix("live ").strip())
+            try:
+                result = _delegate_with_reuse(orchestrator, task.removeprefix("live ").strip())
+            except (KeyError, ValueError) as exc:
+                print(f"Delegation blocked: {exc}")
+                return "subagents"
             print("SUBAGENT LIVE")
             print(format_events(result.events))
             print("")
@@ -1804,7 +1838,13 @@ def dispatch_interactive_command(command: str, paths: RuntimePaths) -> str:
             print("")
             print("usage: /subagents <task> | /subagents artifacts | /subagents artifacts show <artifact-id> | /subagents artifacts search <query> | /subagents live <task> | /subagents bg <task> | /subagents jobs | /subagents job <job-id> | /subagents monitor <job-id> | /subagents unwatch | /subagents cancel <job-id>")
         else:
-            result = orchestrator.delegate(task)
+            if task.startswith("delegate "):
+                task = task.removeprefix("delegate ").strip()
+            try:
+                result = _delegate_with_reuse(orchestrator, task)
+            except (KeyError, ValueError) as exc:
+                print(f"Delegation blocked: {exc}")
+                return "subagents"
             print(format_delegation(result))
         return "subagents"
     if command.startswith("/agents"):
@@ -1817,7 +1857,11 @@ def dispatch_interactive_command(command: str, paths: RuntimePaths) -> str:
         elif task == "contracts":
             print(format_agent_contracts(agent_contracts_payload(paths)))
         elif task.startswith("delegate "):
-            result = orchestrator.delegate(task.removeprefix("delegate ").strip())
+            try:
+                result = _delegate_with_reuse(orchestrator, task.removeprefix("delegate ").strip())
+            except (KeyError, ValueError) as exc:
+                print(f"Delegation blocked: {exc}")
+                return "agents"
             print(format_delegation(result).replace("SUBAGENT DELEGATION", "AGENT DELEGATION", 1))
         elif task in {"artifacts", "artifact list"}:
             rows = SubagentStore(paths).artifacts()
@@ -1861,14 +1905,22 @@ def dispatch_interactive_command(command: str, paths: RuntimePaths) -> str:
             print(format_background_job(orchestrator.cancel_background(task.removeprefix("cancel ").strip())).replace("SUBAGENT BACKGROUND JOB", "AGENT BACKGROUND JOB", 1))
         elif task.startswith("live ") or task.startswith("stream "):
             prompt = task.split(maxsplit=1)[1] if " " in task else ""
-            result = orchestrator.delegate(prompt)
+            try:
+                result = _delegate_with_reuse(orchestrator, prompt)
+            except (KeyError, ValueError) as exc:
+                print(f"Delegation blocked: {exc}")
+                return "agents"
             print("AGENTS LIVE")
             print(format_events(result.events))
             print("")
             print(f"root      {result.root.id}  {result.root.status}")
             print(f"receipt   {result.receipt_id}")
         else:
-            result = orchestrator.delegate(task)
+            try:
+                result = _delegate_with_reuse(orchestrator, task)
+            except (KeyError, ValueError) as exc:
+                print(f"Delegation blocked: {exc}")
+                return "agents"
             print(format_delegation(result).replace("SUBAGENT DELEGATION", "AGENT DELEGATION", 1))
         return "agents"
     if command.startswith("/sessions"):

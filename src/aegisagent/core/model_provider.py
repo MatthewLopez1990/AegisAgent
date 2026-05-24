@@ -500,6 +500,7 @@ def _artifact_context(artifacts: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "kind": str(artifact.get("kind") or ""),
                 "summary": str(artifact.get("summary") or "")[:1200],
                 "input_artifacts": [str(item) for item in artifact.get("input_artifacts", []) if item],
+                "content_included": bool(artifact.get("content_included")),
             }
         )
     return rows

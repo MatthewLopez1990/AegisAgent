@@ -1937,6 +1937,33 @@ class CliTests(unittest.TestCase):
             self.assertEqual(stopped.returncode, 0, stopped.stderr)
             self.assertEqual(len(json.loads(stopped.stdout)["stopped"]), 5)
 
+    def test_subagents_cli_reuses_artifact_only_after_approval_and_audits_safety_flags(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            first = run_cli("subagents", "--delegate", "seed reusable context", cwd=tmp)
+            self.assertEqual(first.returncode, 0, first.stderr)
+            planner_artifact = next(worker["artifacts"][0]["id"] for worker in json.loads(first.stdout)["workers"] if worker["role"] == "planner")
+
+            blocked = run_cli("subagents", "--delegate", "continue from prior", "--use-artifact", planner_artifact, cwd=tmp)
+            self.assertEqual(blocked.returncode, 2)
+            self.assertIn("requires explicit approval", blocked.stderr)
+
+            approved = run_cli("subagents", "--delegate", "continue from prior", "--use-artifact", planner_artifact, "--approved", cwd=tmp)
+            self.assertEqual(approved.returncode, 0, approved.stderr)
+            payload = json.loads(approved.stdout)
+            self.assertEqual(payload["reused_artifact_ids"], [planner_artifact])
+            self.assertEqual(payload["reused_artifact_count"], 1)
+            self.assertEqual(payload["generated_artifact_count"], 4)
+            self.assertTrue(all(worker["input_artifacts"][0] == planner_artifact for worker in payload["workers"]))
+
+            audit_rows = [json.loads(line) for line in (Path(tmp) / ".aegisagent" / "audit.jsonl").read_text(encoding="utf-8").splitlines() if line.strip()]
+            reuse_receipt = next(row for row in audit_rows if row["event_type"] == "subagent.artifacts.reused")
+            self.assertTrue(reuse_receipt["payload"]["approved"])
+            self.assertEqual(reuse_receipt["payload"]["artifact_ids"], [planner_artifact])
+            self.assertFalse(reuse_receipt["payload"]["browser_auto_launch"])
+            self.assertFalse(reuse_receipt["payload"]["raw_secret_values_included"])
+            self.assertFalse(reuse_receipt["payload"]["external_action_started"])
+            self.assertFalse(reuse_receipt["payload"]["model_invocation_performed"])
+
     def test_agents_delegate_routes_workers_to_ready_provider_without_browser(self):
         seen: dict[str, object] = {"bodies": []}
 
@@ -2012,17 +2039,31 @@ class CliTests(unittest.TestCase):
                 self.assertIn("A101_IMPLEMENTER_ARTIFACT", text_by_role["reviewer"])
                 self.assertNotIn("A101_REVIEWER_ARTIFACT", text_by_role["implementer"])
                 self.assertEqual(payload["artifact_count"], 4)
+                planner_artifact = next(worker["artifacts"][0]["id"] for worker in payload["workers"] if worker["role"] == "planner")
+
+                reuse = run_cli("agents", "delegate", "continue approved reuse", "--use-artifact", planner_artifact, "--approved", cwd=tmp, extra_env={"AEGIS_TEST_OPENAI_KEY": "test-key"})
+                self.assertEqual(reuse.returncode, 0, reuse.stderr)
+                reuse_payload = json.loads(reuse.stdout)
+                self.assertEqual(reuse_payload["reused_artifact_ids"], [planner_artifact])
+                reuse_requests = seen["bodies"][4:]
+                self.assertEqual(len(reuse_requests), 4)
+                reuse_text = "\n".join(json.dumps(body) for body in reuse_requests)
+                self.assertIn(planner_artifact, reuse_text)
+                self.assertIn('\\"content_included\\": false', reuse_text)
+                self.assertNotIn(".aegisagent/subagents/artifacts", reuse_text)
 
                 usage = run_cli("model", "usage", cwd=tmp)
                 self.assertEqual(usage.returncode, 0, usage.stderr)
                 usage_payload = json.loads(usage.stdout)
                 self.assertEqual(usage_payload["count"], 0)
-                self.assertEqual(usage_payload["worker_count"], 4)
-                self.assertEqual(usage_payload["worker_external_calls"], 4)
+                self.assertEqual(usage_payload["worker_count"], 8)
+                self.assertEqual(usage_payload["worker_external_calls"], 8)
                 self.assertEqual(usage_payload["worker_providers"], ["openai/worker-model"])
                 audit = (Path(tmp) / ".aegisagent" / "audit.jsonl").read_text(encoding="utf-8")
+                self.assertIn("subagent.artifacts.reused", audit)
                 self.assertIn('"external_model_invocation_performed": true', audit)
                 self.assertIn('"browser_auto_launch": false', audit)
+                self.assertIn('"content_included": false', audit)
                 self.assertNotIn("test-key", audit)
         finally:
             server.shutdown()
@@ -2070,12 +2111,18 @@ class CliTests(unittest.TestCase):
             search_json = run_cli("--json", "agents", "search-artifacts", "Checkpoint plan", cwd=tmp)
             self.assertEqual(search_json.returncode, 0, search_json.stderr)
             self.assertEqual(json.loads(search_json.stdout)["artifacts"][0]["id"], planner_artifact)
+            reused = run_cli("agents", "delegate", "continue with approved context", "--use-artifact", planner_artifact, "--approved", cwd=tmp)
+            self.assertEqual(reused.returncode, 0, reused.stderr)
+            reused_payload = json.loads(reused.stdout)
+            self.assertEqual(reused_payload["reused_artifact_ids"], [planner_artifact])
+            self.assertTrue(all(worker["input_artifacts"][0] == planner_artifact for worker in reused_payload["workers"]))
             audit = (Path(tmp) / ".aegisagent" / "audit.jsonl").read_text(encoding="utf-8")
             self.assertIn("contract_version", audit)
             self.assertIn("Checkpoint plan", audit)
             self.assertIn("subagent.artifacts.listed", audit)
             self.assertIn("subagent.artifact.read", audit)
             self.assertIn("subagent.artifacts.searched", audit)
+            self.assertIn("subagent.artifacts.reused", audit)
 
             background = run_cli("agents", "bg", "background agent work", cwd=tmp, extra_env={"AEGISAGENT_BACKGROUND_NO_SPAWN": "1"})
             self.assertEqual(background.returncode, 0, background.stderr)

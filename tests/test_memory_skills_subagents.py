@@ -432,6 +432,52 @@ class MemorySkillsSubagentTests(unittest.TestCase):
             self.assertEqual(sum(1 for event in events if event.event == "worker.started"), 4)
             self.assertIn("SUBAGENT TIMELINE", format_events(events))
 
+    def test_cross_delegation_artifact_reuse_requires_approval_and_audits_safety_flags(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = runtime_paths(tmp)
+            raw_secret = "sk-" + ("a" * 24)
+            first = LocalSubagentOrchestrator(paths).delegate(f"seed artifact without leaking {raw_secret}")
+            planner_artifact = next(worker.artifacts[0]["id"] for worker in first.workers if worker.role == "planner")
+
+            with self.assertRaisesRegex(ValueError, "requires explicit approval"):
+                LocalSubagentOrchestrator(paths).delegate("continue from prior", reusable_artifact_ids=[planner_artifact])
+
+            blocked_audit = (paths.state_dir / "audit.jsonl").read_text(encoding="utf-8")
+            self.assertNotIn("subagent.artifacts.reused", blocked_audit)
+
+            second = LocalSubagentOrchestrator(paths).delegate("continue from prior", reusable_artifact_ids=[planner_artifact, planner_artifact], reuse_approved=True)
+
+            self.assertEqual(second.root.input_artifacts, [planner_artifact])
+            self.assertEqual(second.to_dict()["reused_artifact_ids"], [planner_artifact])
+            self.assertEqual(second.to_dict()["reused_artifact_count"], 1)
+            self.assertEqual(second.to_dict()["generated_artifact_count"], 4)
+            self.assertEqual(len(second.artifacts), 4)
+            for worker in second.workers:
+                self.assertEqual(worker.input_artifacts[0], planner_artifact)
+            self.assertIn("artifacts.reused", [event.event for event in second.events])
+
+            audit_rows = [json.loads(line) for line in (paths.state_dir / "audit.jsonl").read_text(encoding="utf-8").splitlines() if line.strip()]
+            reuse_receipt = next(row for row in audit_rows if row["event_type"] == "subagent.artifacts.reused")
+            self.assertTrue(reuse_receipt["payload"]["approved"])
+            self.assertEqual(reuse_receipt["payload"]["artifact_ids"], [planner_artifact])
+            self.assertFalse(reuse_receipt["payload"]["browser_auto_launch"])
+            self.assertFalse(reuse_receipt["payload"]["raw_secret_values_included"])
+            self.assertFalse(reuse_receipt["payload"]["external_action_started"])
+            self.assertFalse(reuse_receipt["payload"]["model_invocation_performed"])
+            self.assertFalse(reuse_receipt["payload"]["artifacts"][0]["content_included"])
+            completed = next(row for row in reversed(audit_rows) if row["event_type"] == "subagent.delegation.completed")
+            self.assertEqual(completed["payload"]["artifact_count"], 4)
+            self.assertEqual(completed["payload"]["generated_artifact_count"], 4)
+            self.assertEqual(completed["payload"]["reused_artifact_ids"], [planner_artifact])
+            self.assertFalse(completed["payload"]["browser_auto_launch"])
+            self.assertFalse(completed["payload"]["raw_secret_values_included"])
+            self.assertNotIn(raw_secret, json.dumps(audit_rows))
+
+            artifact_row = SubagentStore(paths).artifact(planner_artifact, include_content=False)
+            Path(artifact_row["path"]).write_text("tampered artifact\n", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "integrity validation failed"):
+                LocalSubagentOrchestrator(paths).delegate("continue from tampered", reusable_artifact_ids=[planner_artifact], reuse_approved=True)
+
     def test_local_subagent_orchestrator_streams_events_to_sink(self):
         with tempfile.TemporaryDirectory() as tmp:
             paths = runtime_paths(tmp)

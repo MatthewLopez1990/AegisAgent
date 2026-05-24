@@ -139,6 +139,7 @@ Root shortcuts do not create singular subcommand families; use `/tasks watch`,
 /tasks watch <task-id>
 /agents
 /agents delegate <task>
+/agents delegate <task> | use-artifact <artifact-id> | approve
 /subagents bg <task>
 /automations
 /improve
@@ -194,7 +195,9 @@ aegis agents
 aegis agents profiles
 aegis agents contracts
 aegis agents delegate "review the current plan"
+aegis agents delegate "continue from artifact" --use-artifact <artifact-id> --approved
 aegis subagents --delegate "review the current plan"
+aegis subagents --delegate "continue from artifact" --use-artifact <artifact-id> --approved
 ```
 
 ## Memory Review

@@ -238,6 +238,7 @@ aegis agents bg "compare implementation options"
 aegis agents artifacts
 aegis agents artifacts show <artifact-id>
 aegis agents artifacts search "Checkpoint plan"
+aegis agents delegate "continue from this prior artifact" --use-artifact <artifact-id> --approved
 aegis model usage
 ```
 
@@ -248,10 +249,28 @@ audit receipts, and falls back locally if an attempted external route fails.
 Later-stage workers receive prior worker artifact summaries while preserving the
 same bounded role contracts and approval model.
 
-Artifact browsing is read-only. `aegis agents artifacts` lists durable role
-artifacts from prior delegations, `show` reads redacted artifact content, and
-`search` matches ids, roles, titles, summaries, and redacted artifact text. It
-does not reuse artifacts across separate delegations yet.
+Artifact browsing is read-only by default. `aegis agents artifacts` lists
+durable role artifacts, `show` reads redacted artifact content, and `search`
+matches ids, roles, titles, summaries, and redacted artifact text. Separately,
+selected prior artifacts can be reused by a later delegation only after explicit
+approval:
+
+```bash
+aegis agents delegate "continue from this prior artifact" --use-artifact <artifact-id> --approved
+aegis subagents --delegate "continue from this prior artifact" --use-artifact <artifact-id> --approved
+```
+
+In the terminal UI, use the same approval style as other gated actions:
+
+```text
+/agents delegate continue from this prior artifact | use-artifact <artifact-id> | approve
+/subagents continue from this prior artifact | use-artifact <artifact-id> | approve
+```
+
+Aegis records reused artifact ids in session metadata and audit receipts, then
+passes artifact ids, roles, titles, and summaries as bounded context to staged
+workers. This is approved context reuse, not final synthesis over an artifact
+graph, and artifact bodies are not sent as model context by reuse.
 
 ## Common Commands
 
@@ -389,15 +408,14 @@ workspace tools, governed git operations, task queues, automations,
 OpenAI-compatible model routing for chat and role workers, scoped model usage
 ledger rows, connector metadata with a redacted approval-bound outbox, memory
 review controls, passive skill trust metadata, and local agent/subagent
-orchestration with provider fallback metadata, durable role artifacts, and
-artifact list/show/search plus handoff metadata.
+orchestration with provider fallback metadata, durable role artifacts,
+artifact list/show/search, stage-to-stage handoff metadata, and
+approval-gated reuse of selected prior artifacts as bounded summary context.
 
 Partial: web console parity, live connectors, self-improvement, richer browser
-automation, cross-delegation artifact reuse, multi-provider fallback ordering,
-subscription bridge readiness, richer role-specific tool budgets, and
-higher-depth delegation controls.
+automation, multi-provider fallback ordering, subscription bridge readiness,
+richer role-specific tool budgets, and higher-depth delegation controls.
 
-Next: approval-gated artifact reuse across delegations, richer role-specific
-tool budgets, higher-depth delegation controls, final synthesis over artifact
-graphs, live browser control behind explicit approval, broader integrations, signed
-skill trust, and packaged release flows.
+Next: richer role-specific tool budgets, higher-depth delegation controls, final
+synthesis over artifact graphs, live browser control behind explicit approval,
+broader integrations, signed skill trust, and packaged release flows.

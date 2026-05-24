@@ -389,13 +389,21 @@ class SubagentStore:
         rows.sort(key=lambda artifact: str(artifact.get("created_at") or ""), reverse=True)
         return rows[:limit]
 
-    def artifact(self, artifact_id: str, *, include_content: bool = True) -> dict[str, Any]:
+    def artifact(self, artifact_id: str, *, include_content: bool = True, require_valid_content: bool = False) -> dict[str, Any]:
         for artifact in self.artifacts(limit=10_000):
             if artifact.get("id") != artifact_id:
                 continue
             row = dict(artifact)
-            if include_content:
-                row["content"] = self._artifact_content(row)
+            if include_content or require_valid_content:
+                content = self._artifact_content(row)
+                try:
+                    expected_bytes = int(row.get("bytes") or 0)
+                except (TypeError, ValueError):
+                    expected_bytes = 0
+                if require_valid_content and expected_bytes > 0 and not content:
+                    raise ValueError(f"artifact integrity validation failed: {artifact_id}")
+                if include_content:
+                    row["content"] = content
             return row
         raise KeyError(f"artifact not found: {artifact_id}")
 
@@ -475,12 +483,16 @@ class SubagentDelegationResult:
 
     def to_dict(self) -> dict[str, Any]:
         artifacts = self.artifacts
+        reused_artifact_ids = list(self.root.input_artifacts)
         return {
             "root": self.root.to_dict(),
             "workers": [worker.to_dict() for worker in self.workers],
             "receipt_id": self.receipt_id,
             "announce_back": self.announce_back,
             "artifact_count": len(artifacts),
+            "generated_artifact_count": len(artifacts),
+            "reused_artifact_count": len(reused_artifact_ids),
+            "reused_artifact_ids": reused_artifact_ids,
             "artifacts": artifacts,
             "events": [event.to_dict() for event in self.events],
         }
@@ -616,15 +628,26 @@ class LocalSubagentOrchestrator:
         task: str,
         *,
         parent_session_id: str = "main",
+        reusable_artifact_ids: tuple[str, ...] | list[str] = (),
+        reuse_approved: bool = False,
         event_sink: Callable[[SubagentEvent], None] | None = None,
     ) -> SubagentDelegationResult:
+        reusable_ids = tuple(dict.fromkeys(str(artifact_id).strip() for artifact_id in reusable_artifact_ids if str(artifact_id).strip()))
+        if len(reusable_ids) > 8:
+            raise ValueError("cross-delegation artifact reuse is limited to 8 artifacts")
+        if reusable_ids and not reuse_approved:
+            raise ValueError("cross-delegation artifact reuse requires explicit approval")
+        reused_artifacts = [self.store.artifact(artifact_id, include_content=False, require_valid_content=True) for artifact_id in reusable_ids]
         queue = SubagentQueue(self.limits)
         root_session = self.sessions.create(f"subagent root {task[:32]}")
         root = queue.spawn(task, role="coordinator", session_id=root_session.id)
+        root.input_artifacts = [artifact["id"] for artifact in reused_artifacts]
         events: list[SubagentEvent] = []
         self._event(events, root.id, "root.started", f"coordinator accepted task: {task}", role=root.role, event_sink=event_sink)
+        if reused_artifacts:
+            self._event(events, root.id, "artifacts.reused", f"approved reuse of {len(reused_artifacts)} prior artifacts", role=root.role, event_sink=event_sink)
         root.status = "running"
-        self.sessions.append(root.session_id, "user", task, metadata={"source": "subagent", "role": root.role, "parent_session_id": parent_session_id})
+        self.sessions.append(root.session_id, "user", task, metadata={"source": "subagent", "role": root.role, "parent_session_id": parent_session_id, "reused_artifact_ids": [artifact["id"] for artifact in reused_artifacts], "artifact_reuse_approved": bool(reused_artifacts)})
         self.store.save(root)
         self.audit.append(
             "subagent.delegation.started",
@@ -635,8 +658,39 @@ class LocalSubagentOrchestrator:
                 "limits": self.limits.__dict__,
                 "contract_version": AGENT_CONTRACT_VERSION,
                 "worker_contracts": [_profile_contract(role) for role in ("planner", "researcher", "implementer", "reviewer")],
+                "reused_artifact_ids": [artifact["id"] for artifact in reused_artifacts],
+                "reused_artifact_count": len(reused_artifacts),
+                "artifact_reuse_approved": bool(reused_artifacts),
+                "external_action_started": False,
+                "browser_auto_launch": False,
+                "raw_secret_values_included": False,
             },
         )
+        if reused_artifacts:
+            self.audit.append(
+                "subagent.artifacts.reused",
+                {
+                    "root_id": root.id,
+                    "artifact_ids": root.input_artifacts,
+                    "artifact_count": len(reused_artifacts),
+                    "artifacts": [
+                        {
+                            "id": artifact["id"],
+                            "role": artifact.get("role", ""),
+                            "kind": artifact.get("kind", ""),
+                            "sha256": artifact.get("sha256", ""),
+                            "bytes": artifact.get("bytes", 0),
+                            "content_included": False,
+                        }
+                        for artifact in reused_artifacts
+                    ],
+                    "approved": True,
+                    "external_action_started": False,
+                    "browser_auto_launch": False,
+                    "raw_secret_values_included": False,
+                    "model_invocation_performed": False,
+                },
+            )
 
         workers: list[SubagentRecord] = []
         for role in ("planner", "researcher", "implementer", "reviewer"):
@@ -663,16 +717,17 @@ class LocalSubagentOrchestrator:
         completed: dict[str, SubagentWorkerResult] = {}
         workers_by_role = {worker.role: worker for worker in workers}
         workers = []
-        artifacts: list[dict[str, Any]] = []
+        context_artifacts: list[dict[str, Any]] = list(reused_artifacts)
+        generated_artifacts: list[dict[str, Any]] = []
 
         for stage_index, stage_roles in enumerate((("planner", "researcher"), ("implementer",), ("reviewer",)), start=1):
             stage_workers = [workers_by_role[role] for role in stage_roles]
             with ThreadPoolExecutor(max_workers=min(max_workers, len(stage_workers)), thread_name_prefix="aegis-subagent") as executor:
                 future_to_worker = {}
                 for worker in stage_workers:
-                    prompt = _role_prompt(worker.role, task, artifacts)
+                    prompt = _role_prompt(worker.role, task, context_artifacts)
                     contract = _profile_contract(worker.role)
-                    worker.input_artifacts = [artifact["id"] for artifact in artifacts]
+                    worker.input_artifacts = [artifact["id"] for artifact in context_artifacts]
                     self.sessions.append(
                         worker.session_id,
                         "user",
@@ -699,7 +754,7 @@ class LocalSubagentOrchestrator:
                             task,
                             worker.session_id,
                             self.sessions.transcript(worker.session_id, limit=12),
-                            artifacts,
+                            context_artifacts,
                         )
                     ] = worker
                 for future in as_completed(future_to_worker):
@@ -784,13 +839,17 @@ class LocalSubagentOrchestrator:
                     worker_id=child.id,
                     event_sink=event_sink,
                 )
-                artifacts.extend(child.artifacts)
+                generated_artifacts.extend(child.artifacts)
+                context_artifacts.extend(child.artifacts)
                 workers.append(child)
 
         root.children = [worker.id for worker in workers]
-        root.summary = f"{len(workers)} model-backed local subagents completed bounded analysis with {len(artifacts)} artifacts for: {task}"
+        root.summary = f"{len(workers)} model-backed local subagents completed bounded analysis with {len(generated_artifacts)} generated artifacts"
+        if reused_artifacts:
+            root.summary += f" and {len(reused_artifacts)} approved reused artifacts"
+        root.summary += f" for: {task}"
         root.status = "completed"
-        self.sessions.append(root.session_id, "assistant", root.summary, metadata={"source": "subagent", "role": root.role, "artifact_ids": [artifact["id"] for artifact in artifacts]})
+        self.sessions.append(root.session_id, "assistant", root.summary, metadata={"source": "subagent", "role": root.role, "artifact_ids": [artifact["id"] for artifact in generated_artifacts], "reused_artifact_ids": root.input_artifacts})
         self.store.save(root)
         self._event(events, root.id, "root.completed", root.summary, role=root.role, event_sink=event_sink)
         receipt = self.audit.append(
@@ -804,8 +863,12 @@ class LocalSubagentOrchestrator:
                 "worker_provider_route_statuses": [worker.provider_route_status for worker in workers],
                 "worker_usage_ids": [worker.usage_id for worker in workers],
                 "worker_fallback_count": sum(1 for worker in workers if worker.fallback_used),
-                "artifact_count": len(artifacts),
-                "artifact_ids": [artifact["id"] for artifact in artifacts],
+                "artifact_count": len(generated_artifacts),
+                "generated_artifact_count": len(generated_artifacts),
+                "artifact_ids": [artifact["id"] for artifact in generated_artifacts],
+                "reused_artifact_ids": root.input_artifacts,
+                "reused_artifact_count": len(reused_artifacts),
+                "artifact_reuse_approved": bool(reused_artifacts),
                 "worker_artifact_ids": [[artifact["id"] for artifact in worker.artifacts] for worker in workers],
                 "worker_input_artifacts": [worker.input_artifacts for worker in workers],
                 "parent_session_id": parent_session_id,
@@ -816,6 +879,8 @@ class LocalSubagentOrchestrator:
                 "external_model_invocation_performed": any(worker.external_model_invocation_performed for worker in workers),
                 "fallback_used": any(worker.fallback_used for worker in workers),
                 "external_action_started": False,
+                "browser_auto_launch": False,
+                "raw_secret_values_included": False,
             },
         )
         return SubagentDelegationResult(root=root, workers=workers, receipt_id=receipt["id"], events=events)
@@ -989,6 +1054,8 @@ def format_delegation(result: SubagentDelegationResult) -> str:
     artifacts = result.artifacts
     if artifacts:
         lines.append(f"artifacts {len(artifacts)} durable role artifacts")
+    if result.root.input_artifacts:
+        lines.append(f"reused    {len(result.root.input_artifacts)} approved prior artifacts")
     lines.extend(["", "workers"])
     for worker in result.workers:
         route_label = "" if route else f" {_worker_route_label(worker)} "

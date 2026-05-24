@@ -1433,11 +1433,24 @@ class TuiRendererTests(unittest.TestCase):
             self.assertEqual(result, "subagents")
             self.assertIn("SUBAGENT ARTIFACT SEARCH", artifact_search.getvalue())
             self.assertIn(planner_artifact, artifact_search.getvalue())
+            blocked = io.StringIO()
+            with contextlib.redirect_stdout(blocked):
+                result = dispatch_interactive_command(f"/subagents continue from prior | use-artifact {planner_artifact}", paths)
+            self.assertEqual(result, "subagents")
+            self.assertIn("requires explicit approval", blocked.getvalue())
+            approved = io.StringIO()
+            with contextlib.redirect_stdout(approved):
+                result = dispatch_interactive_command(f"/subagents continue from prior | use-artifact {planner_artifact} | approve", paths)
+            self.assertEqual(result, "subagents")
+            self.assertIn("SUBAGENT DELEGATION", approved.getvalue())
             audit = (paths.state_dir / "audit.jsonl").read_text(encoding="utf-8")
             self.assertIn("subagent.delegation.completed", audit)
             self.assertIn("subagent.artifacts.listed", audit)
             self.assertIn("subagent.artifact.read", audit)
             self.assertIn("subagent.artifacts.searched", audit)
+            self.assertIn("subagent.artifacts.reused", audit)
+            self.assertIn('"browser_auto_launch": false', audit)
+            self.assertIn('"raw_secret_values_included": false', audit)
 
     def test_interactive_dispatch_agents_surface(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1500,6 +1513,24 @@ class TuiRendererTests(unittest.TestCase):
             self.assertEqual(result, "agents")
             self.assertIn("AGENT ARTIFACT SEARCH", artifact_search.getvalue())
             self.assertIn(planner_artifact, artifact_search.getvalue())
+
+            blocked_reuse = io.StringIO()
+            with contextlib.redirect_stdout(blocked_reuse):
+                result = dispatch_interactive_command(f"/agents delegate continue from prior | use-artifact {planner_artifact}", paths)
+
+            self.assertEqual(result, "agents")
+            self.assertIn("requires explicit approval", blocked_reuse.getvalue())
+
+            approved_reuse = io.StringIO()
+            with contextlib.redirect_stdout(approved_reuse):
+                result = dispatch_interactive_command(f"/agents delegate continue from prior | use-artifact {planner_artifact} | approve", paths)
+
+            self.assertEqual(result, "agents")
+            self.assertIn("AGENT DELEGATION", approved_reuse.getvalue())
+            audit = (paths.state_dir / "audit.jsonl").read_text(encoding="utf-8")
+            self.assertIn("subagent.artifacts.reused", audit)
+            self.assertIn('"browser_auto_launch": false', audit)
+            self.assertIn('"raw_secret_values_included": false', audit)
 
             background = io.StringIO()
             with patch.dict("os.environ", {"AEGISAGENT_BACKGROUND_NO_SPAWN": "1"}), contextlib.redirect_stdout(background):
