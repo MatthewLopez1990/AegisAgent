@@ -14,6 +14,8 @@ from uuid import uuid4
 
 from aegisagent.config import RuntimePaths, ensure_runtime
 from aegisagent.core.command_names import terminal_command_name
+from aegisagent.core.model_provider import ModelRequest, provider_for_active_route
+from aegisagent.core.provider_config import ProviderUsageStore
 from aegisagent.core.sessions import SessionStore
 from aegisagent.models import utc_now
 from aegisagent.security.audit import AuditLog
@@ -159,6 +161,15 @@ class SubagentRecord:
     status: str = "queued"
     children: list[str] = field(default_factory=list)
     summary: str = ""
+    provider: str = ""
+    provider_mode: str = ""
+    provider_route_status: str = ""
+    usage_id: str = ""
+    model_invocation_performed: bool = False
+    external_model_invocation_performed: bool = False
+    fallback_used: bool = False
+    fallback_provider: str = ""
+    primary_provider: str = ""
     created_at: str = field(default_factory=utc_now)
     updated_at: str = field(default_factory=utc_now)
 
@@ -173,6 +184,15 @@ class SubagentRecord:
             "status": self.status,
             "children": self.children,
             "summary": self.summary,
+            "provider": self.provider,
+            "provider_mode": self.provider_mode,
+            "provider_route_status": self.provider_route_status,
+            "usage_id": self.usage_id,
+            "model_invocation_performed": self.model_invocation_performed,
+            "external_model_invocation_performed": self.external_model_invocation_performed,
+            "fallback_used": self.fallback_used,
+            "fallback_provider": self.fallback_provider,
+            "primary_provider": self.primary_provider,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
         }
@@ -189,6 +209,15 @@ class SubagentRecord:
             status=str(data.get("status") or "queued"),
             children=[str(child) for child in data.get("children", [])],
             summary=str(data.get("summary") or ""),
+            provider=str(data.get("provider") or ""),
+            provider_mode=str(data.get("provider_mode") or ""),
+            provider_route_status=str(data.get("provider_route_status") or ""),
+            usage_id=str(data.get("usage_id") or ""),
+            model_invocation_performed=bool(data.get("model_invocation_performed")),
+            external_model_invocation_performed=bool(data.get("external_model_invocation_performed")),
+            fallback_used=bool(data.get("fallback_used")),
+            fallback_provider=str(data.get("fallback_provider") or ""),
+            primary_provider=str(data.get("primary_provider") or ""),
             created_at=str(data.get("created_at") or utc_now()),
             updated_at=str(data.get("updated_at") or utc_now()),
         )
@@ -223,6 +252,39 @@ class SubagentEvent:
             worker_id=str(data.get("worker_id") or ""),
             created_at=str(data.get("created_at") or utc_now()),
         )
+
+
+@dataclass(frozen=True, slots=True)
+class SubagentWorkerResult:
+    summary: str
+    provider: str
+    provider_mode: str
+    provider_route_status: str
+    model_invocation_performed: bool
+    external_model_invocation_performed: bool
+    fallback_used: bool
+    fallback_provider: str
+    prompt_chars: int
+    assistant_chars: int
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
+    total_tokens: int | None = None
+    primary_provider: str = ""
+    redacted: bool = False
+
+    def metadata(self) -> dict[str, Any]:
+        return {
+            "provider": self.provider,
+            "provider_mode": self.provider_mode,
+            "provider_route_status": self.provider_route_status,
+            "model_invocation_performed": self.model_invocation_performed,
+            "external_model_invocation_performed": self.external_model_invocation_performed,
+            "fallback_used": self.fallback_used,
+            "fallback_provider": self.fallback_provider,
+            "primary_provider": self.primary_provider,
+            "browser_auto_launch": False,
+            "raw_secret_values_included": False,
+        }
 
 
 class SubagentQueue:
@@ -334,8 +396,12 @@ class SubagentDelegationResult:
     @property
     def announce_back(self) -> str:
         lines = [f"Delegated `{self.root.task}` to {len(self.workers)} bounded local subagents:"]
+        route = _delegation_route_summary(self.workers)
+        if route:
+            lines.append(f"model: {route}")
         for worker in self.workers:
-            lines.append(f"- {worker.role}: {worker.summary}")
+            prefix = worker.role if route else f"{worker.role} [{_worker_route_label(worker)}]"
+            lines.append(f"- {prefix}: {worker.summary}")
         return "\n".join(lines)
 
 
@@ -507,9 +573,19 @@ class LocalSubagentOrchestrator:
             workers.append(child)
 
         max_workers = max(1, min(len(workers), self.limits.max_concurrency - 1))
-        completed: dict[str, str] = {}
+        completed: dict[str, SubagentWorkerResult] = {}
         with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="aegis-subagent") as executor:
-            future_to_worker = {executor.submit(_role_summary, worker.role, task): worker for worker in workers}
+            future_to_worker = {
+                executor.submit(
+                    _run_role_worker,
+                    self.paths,
+                    worker.role,
+                    task,
+                    worker.session_id,
+                    self.sessions.transcript(worker.session_id, limit=12),
+                ): worker
+                for worker in workers
+            }
             for future in as_completed(future_to_worker):
                 worker = future_to_worker[future]
                 completed[worker.id] = future.result()
@@ -518,20 +594,18 @@ class LocalSubagentOrchestrator:
         workers = []
         for worker_id in sorted(workers_by_id, key=lambda item: ("planner", "researcher", "implementer", "reviewer").index(workers_by_id[item].role)):
             child = workers_by_id[worker_id]
-            child.summary = completed[child.id]
+            worker_result = completed[child.id]
+            child.summary = worker_result.summary
+            child.provider = worker_result.provider
+            child.provider_mode = worker_result.provider_mode
+            child.provider_route_status = worker_result.provider_route_status
+            child.model_invocation_performed = worker_result.model_invocation_performed
+            child.external_model_invocation_performed = worker_result.external_model_invocation_performed
+            child.fallback_used = worker_result.fallback_used
+            child.fallback_provider = worker_result.fallback_provider
+            child.primary_provider = worker_result.primary_provider
             child.status = "completed"
-            self.sessions.append(child.session_id, "assistant", child.summary, metadata={"source": "subagent", "role": child.role})
-            self.store.save(child)
-            self._event(
-                events,
-                root.id,
-                "worker.completed",
-                f"{child.role} completed: {child.summary}",
-                role=child.role,
-                worker_id=child.id,
-                event_sink=event_sink,
-            )
-            self.audit.append(
+            worker_receipt = self.audit.append(
                 "subagent.worker.completed",
                 {
                     "root_id": root.id,
@@ -540,13 +614,55 @@ class LocalSubagentOrchestrator:
                     "status": child.status,
                     "contract_version": AGENT_CONTRACT_VERSION,
                     "deliverable": _profile_contract(child.role)["deliverable"],
+                    **worker_result.metadata(),
                     "external_action_started": False,
                 },
+            )
+            usage = ProviderUsageStore(self.paths).record(
+                provider=worker_result.provider,
+                mode=worker_result.provider_mode,
+                status="completed",
+                session_id=child.session_id,
+                source=f"subagent.{child.role}",
+                prompt_chars=worker_result.prompt_chars,
+                assistant_chars=worker_result.assistant_chars,
+                external_model_invocation_performed=worker_result.external_model_invocation_performed,
+                provider_route_status=worker_result.provider_route_status,
+                primary_provider=worker_result.primary_provider,
+                fallback_used=worker_result.fallback_used,
+                fallback_provider=worker_result.fallback_provider,
+                prompt_tokens=worker_result.prompt_tokens,
+                completion_tokens=worker_result.completion_tokens,
+                total_tokens=worker_result.total_tokens,
+                receipt_id=worker_receipt["id"],
+                redacted=worker_result.redacted,
+                scope="subagent_worker",
+                parent_session_id=parent_session_id,
+                subagent_root_id=root.id,
+                worker_id=child.id,
+                worker_role=child.role,
+            )
+            child.usage_id = usage["id"]
+            self.sessions.append(
+                child.session_id,
+                "assistant",
+                child.summary,
+                metadata={"source": "subagent", "role": child.role, "usage_id": child.usage_id, **worker_result.metadata()},
+            )
+            self.store.save(child)
+            self._event(
+                events,
+                root.id,
+                "worker.completed",
+                f"{child.role} completed via {child.provider}: {child.summary}",
+                role=child.role,
+                worker_id=child.id,
+                event_sink=event_sink,
             )
             workers.append(child)
 
         root.children = [worker.id for worker in workers]
-        root.summary = f"{len(workers)} local subagents completed bounded analysis for: {task}"
+        root.summary = f"{len(workers)} model-backed local subagents completed bounded analysis for: {task}"
         root.status = "completed"
         self.sessions.append(root.session_id, "assistant", root.summary, metadata={"source": "subagent", "role": root.role})
         self.store.save(root)
@@ -557,10 +673,18 @@ class LocalSubagentOrchestrator:
                 "root_id": root.id,
                 "worker_ids": [worker.id for worker in workers],
                 "worker_roles": [worker.role for worker in workers],
+                "worker_providers": [worker.provider for worker in workers],
+                "worker_provider_modes": [worker.provider_mode for worker in workers],
+                "worker_provider_route_statuses": [worker.provider_route_status for worker in workers],
+                "worker_usage_ids": [worker.usage_id for worker in workers],
+                "worker_fallback_count": sum(1 for worker in workers if worker.fallback_used),
                 "parent_session_id": parent_session_id,
                 "status": root.status,
                 "contract_version": AGENT_CONTRACT_VERSION,
                 "worker_contracts": [_profile_contract(worker.role) for worker in workers],
+                "model_invocation_performed": True,
+                "external_model_invocation_performed": any(worker.external_model_invocation_performed for worker in workers),
+                "fallback_used": any(worker.fallback_used for worker in workers),
                 "external_action_started": False,
             },
         )
@@ -728,11 +852,14 @@ def format_delegation(result: SubagentDelegationResult) -> str:
         "SUBAGENT DELEGATION",
         f"root      {result.root.id}  {result.root.status}  {result.root.task}",
         f"receipt   {result.receipt_id}",
-        "",
-        "workers",
     ]
+    route = _delegation_route_summary(result.workers)
+    if route:
+        lines.append(f"model     {route}")
+    lines.extend(["", "workers"])
     for worker in result.workers:
-        lines.append(f"- {worker.role:<11} {worker.id}  {worker.status:<9} {worker.summary}")
+        route_label = "" if route else f" {_worker_route_label(worker)} "
+        lines.append(f"- {worker.role:<11} {worker.id}  {worker.status:<9}{route_label} {worker.summary}")
     return "\n".join(lines)
 
 
@@ -790,13 +917,16 @@ def format_agent_contracts(payload: dict[str, Any]) -> str:
 def format_subagent_records(records: list[dict[str, Any]]) -> str:
     if not records:
         return "SUBAGENTS\nNo persisted subagents yet. Use /subagents <task> to delegate bounded local work."
-    lines = ["SUBAGENTS", "role         status     id          parent      task"]
+    lines = ["SUBAGENTS", "role         status     provider             id          parent      task"]
     for record in records[:20]:
         parent = record.get("parent_id") or "-"
+        provider = str(record.get("provider") or "-")
+        if len(provider) > 20:
+            provider = provider[:17] + "..."
         task = str(record.get("task") or "")
         if len(task) > 42:
             task = task[:39] + "..."
-        lines.append(f"{record.get('role', ''):<12} {record.get('status', ''):<10} {record.get('id', ''):<11} {parent:<11} {task}")
+        lines.append(f"{record.get('role', ''):<12} {record.get('status', ''):<10} {provider:<20} {record.get('id', ''):<11} {parent:<11} {task}")
     return "\n".join(lines)
 
 
@@ -879,6 +1009,38 @@ def _role_prompt(role: str, task: str) -> str:
     )
 
 
+def _run_role_worker(paths: RuntimePaths, role: str, task: str, session_id: str, transcript: list[dict[str, Any]]) -> SubagentWorkerResult:
+    prompt = _role_prompt(role, task)
+    provider, _route = provider_for_active_route(paths)
+    response = provider.complete(
+        ModelRequest(
+            prompt=prompt,
+            session_id=session_id,
+            transcript=transcript,
+            workspace=paths.workspace,
+            tool_results=[],
+        )
+    )
+    metadata = response.metadata
+    return SubagentWorkerResult(
+        summary=_worker_summary_from_response(response.content, role, task),
+        provider=response.provider,
+        provider_mode=response.mode,
+        provider_route_status=str(metadata.get("provider_route_status", "")) or response.mode,
+        model_invocation_performed=True,
+        external_model_invocation_performed=bool(metadata.get("external_model_invocation_performed")),
+        fallback_used=bool(metadata.get("fallback_used")),
+        fallback_provider=str(metadata.get("fallback_provider") or ""),
+        prompt_chars=len(prompt),
+        assistant_chars=len(response.content),
+        prompt_tokens=metadata.get("prompt_tokens") if isinstance(metadata.get("prompt_tokens"), int) else None,
+        completion_tokens=metadata.get("completion_tokens") if isinstance(metadata.get("completion_tokens"), int) else None,
+        total_tokens=metadata.get("total_tokens") if isinstance(metadata.get("total_tokens"), int) else None,
+        primary_provider=str(metadata.get("primary_provider") or ""),
+        redacted=bool(metadata.get("redacted")),
+    )
+
+
 def _role_summary(role: str, task: str) -> str:
     contract = _profile_contract(role)
     if role == "planner":
@@ -890,3 +1052,33 @@ def _role_summary(role: str, task: str) -> str:
     if role == "reviewer":
         return f"{contract['deliverable']} Check claims against current evidence. Task: {task}"
     return f"Completed local bounded work for: {task}"
+
+
+def _worker_summary_from_response(content: str, role: str, task: str) -> str:
+    text = content.strip()
+    marker = "Subagent worker contribution:"
+    if marker in text:
+        contribution = text.split(marker, 1)[1].split("Provider note:", 1)[0].strip()
+        if contribution:
+            return contribution
+    return text or _role_summary(role, task)
+
+
+def _delegation_route_summary(workers: list[SubagentRecord]) -> str:
+    if not workers:
+        return ""
+    labels = {_worker_route_label(worker) for worker in workers}
+    if len(labels) == 1:
+        return labels.pop()
+    return ""
+
+
+def _worker_route_label(worker: SubagentRecord) -> str:
+    provider = worker.provider or "unknown-provider"
+    mode = worker.provider_mode or "unknown"
+    status = worker.provider_route_status or "unknown"
+    if worker.fallback_used:
+        primary = worker.primary_provider or provider
+        fallback = worker.fallback_provider or provider
+        return f"provider={provider} mode={mode} fallback={primary}->{fallback} status={status}"
+    return f"provider={provider} mode={mode} fallback=false status={status}"

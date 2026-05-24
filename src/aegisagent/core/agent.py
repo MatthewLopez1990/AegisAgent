@@ -7,7 +7,7 @@ from aegisagent.config import RuntimePaths
 from aegisagent.core.model_provider import ModelRequest, ModelResponse, provider_for_active_route
 from aegisagent.core.provider_config import ProviderUsageStore
 from aegisagent.core.sessions import SessionStore
-from aegisagent.core.subagents import LocalSubagentOrchestrator
+from aegisagent.core.subagents import AGENT_CONTRACT_VERSION, LocalSubagentOrchestrator
 from aegisagent.core.web_tools import WebToolRunner
 from aegisagent.core.workspace_tools import WorkspaceToolRunner
 from aegisagent.security.audit import AuditLog
@@ -80,6 +80,7 @@ class AgentRuntime:
             )
         if _should_delegate(prompt):
             delegation = self.subagents.delegate(prompt, parent_session_id=session.id)
+            worker_provider_metadata = [_worker_provider_metadata(worker.to_dict()) for worker in delegation.workers]
             tool_results.append(
                 RuntimeToolResult(
                     name="subagents.delegate",
@@ -89,6 +90,12 @@ class AgentRuntime:
                         "root_id": delegation.root.id,
                         "worker_count": len(delegation.workers),
                         "worker_roles": [worker.role for worker in delegation.workers],
+                        "contract_version": AGENT_CONTRACT_VERSION,
+                        "worker_provider_metadata": worker_provider_metadata,
+                        "worker_usage_ids": [row["usage_id"] for row in worker_provider_metadata if row.get("usage_id")],
+                        "worker_providers": sorted({row["provider"] for row in worker_provider_metadata if row.get("provider")}),
+                        "worker_external_calls": sum(1 for row in worker_provider_metadata if row.get("external_model_invocation_performed")),
+                        "worker_fallback_count": sum(1 for row in worker_provider_metadata if row.get("fallback_used")),
                         "event_count": len(delegation.events),
                         "receipt_id": delegation.receipt_id,
                     },
@@ -139,6 +146,10 @@ class AgentRuntime:
                 "assistant_chars": len(response.content),
                 "tool_count": len(tool_results),
                 "tools": [result.name for result in tool_results],
+                "delegated_worker_count": _delegated_worker_count(tool_results),
+                "delegated_worker_usage_ids": _delegated_worker_usage_ids(tool_results),
+                "delegated_worker_providers": _delegated_worker_providers(tool_results),
+                "delegated_worker_external_calls": _delegated_worker_external_calls(tool_results),
                 "model_invocation_performed": True,
                 "external_model_invocation_performed": bool(response.metadata.get("external_model_invocation_performed")),
                 "provider_route_status": response.metadata.get("provider_route_status", ""),
@@ -183,6 +194,51 @@ class AgentRuntime:
 def _should_delegate(prompt: str) -> bool:
     lower = prompt.lower()
     return any(term in lower for term in ("subagent", "sub-agent", "delegate", "parallel agents", "many agents"))
+
+
+def _worker_provider_metadata(worker: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "worker_id": str(worker.get("id") or ""),
+        "role": str(worker.get("role") or ""),
+        "session_id": str(worker.get("session_id") or ""),
+        "provider": str(worker.get("provider") or ""),
+        "mode": str(worker.get("provider_mode") or ""),
+        "provider_route_status": str(worker.get("provider_route_status") or ""),
+        "primary_provider": str(worker.get("primary_provider") or ""),
+        "fallback_used": bool(worker.get("fallback_used")),
+        "fallback_provider": str(worker.get("fallback_provider") or ""),
+        "external_model_invocation_performed": bool(worker.get("external_model_invocation_performed")),
+        "usage_id": str(worker.get("usage_id") or ""),
+        "browser_auto_launch": False,
+        "raw_secret_values_included": False,
+    }
+
+
+def _delegated_worker_rows(tool_results: list[RuntimeToolResult]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for result in tool_results:
+        if result.name != "subagents.delegate":
+            continue
+        metadata_rows = result.metadata.get("worker_provider_metadata", [])
+        if isinstance(metadata_rows, list):
+            rows.extend(row for row in metadata_rows if isinstance(row, dict))
+    return rows
+
+
+def _delegated_worker_count(tool_results: list[RuntimeToolResult]) -> int:
+    return len(_delegated_worker_rows(tool_results))
+
+
+def _delegated_worker_usage_ids(tool_results: list[RuntimeToolResult]) -> list[str]:
+    return [str(row.get("usage_id")) for row in _delegated_worker_rows(tool_results) if row.get("usage_id")]
+
+
+def _delegated_worker_providers(tool_results: list[RuntimeToolResult]) -> list[str]:
+    return sorted({str(row.get("provider")) for row in _delegated_worker_rows(tool_results) if row.get("provider")})
+
+
+def _delegated_worker_external_calls(tool_results: list[RuntimeToolResult]) -> int:
+    return sum(1 for row in _delegated_worker_rows(tool_results) if row.get("external_model_invocation_performed"))
 
 
 def _extract_session_search_query(prompt: str) -> str:

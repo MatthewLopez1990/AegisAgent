@@ -5,6 +5,7 @@ from pathlib import Path
 
 from aegisagent.config import runtime_paths
 from aegisagent.core.memory import MemoryStore
+from aegisagent.core.provider_config import ProviderUsageStore
 from aegisagent.core.sessions import SessionStore
 from aegisagent.core.skills import SkillLoader
 from aegisagent.core.subagents import (
@@ -357,10 +358,23 @@ class MemorySkillsSubagentTests(unittest.TestCase):
             self.assertEqual(len(stored), 5)
             self.assertTrue(all(record["session_id"] for record in stored))
             self.assertIn("bounded local subagents", result.announce_back)
+            self.assertTrue(all(worker.model_invocation_performed for worker in result.workers))
+            self.assertEqual({worker.provider for worker in result.workers}, {"local/terminal-v0"})
+            self.assertEqual({worker.provider_mode for worker in result.workers}, {"local"})
+            self.assertEqual({worker.provider_route_status for worker in result.workers}, {"local"})
+            self.assertFalse(any(worker.external_model_invocation_performed for worker in result.workers))
+            self.assertFalse(any(worker.fallback_used for worker in result.workers))
+            self.assertTrue(all(worker.usage_id.startswith("usage-") for worker in result.workers))
+            usage = ProviderUsageStore(paths).summary()
+            self.assertEqual(usage["count"], 0)
+            self.assertEqual(usage["worker_count"], 4)
+            self.assertEqual(usage["worker_providers"], ["local/terminal-v0"])
             receipt = AuditLog(paths).recent(1)[0]
             self.assertEqual(receipt["id"], result.receipt_id)
             self.assertEqual(receipt["event_type"], "subagent.delegation.completed")
             self.assertEqual(receipt["payload"]["worker_roles"], ["planner", "researcher", "implementer", "reviewer"])
+            self.assertEqual(receipt["payload"]["worker_providers"], ["local/terminal-v0"] * 4)
+            self.assertEqual(receipt["payload"]["worker_usage_ids"], [worker.usage_id for worker in result.workers])
             self.assertEqual(receipt["payload"]["contract_version"], AGENT_CONTRACT_VERSION)
             self.assertEqual(receipt["payload"]["worker_contracts"][0]["role"], "planner")
             self.assertIn("Checkpoint plan", receipt["payload"]["worker_contracts"][0]["deliverable"])
@@ -369,6 +383,9 @@ class MemorySkillsSubagentTests(unittest.TestCase):
             self.assertEqual(planner_messages[0]["metadata"]["contract_version"], AGENT_CONTRACT_VERSION)
             self.assertIn("context_contract", planner_messages[0]["metadata"])
             self.assertIn("Tool budget:", planner_messages[0]["content"])
+            self.assertIn("Checkpoint plan", planner_messages[-1]["content"])
+            self.assertEqual(planner_messages[-1]["metadata"]["provider"], planner.provider)
+            self.assertEqual(planner_messages[-1]["metadata"]["usage_id"], planner.usage_id)
             event_types = [receipt["event_type"] for receipt in AuditLog(paths).recent(12)]
             self.assertEqual(event_types.count("subagent.worker.started"), 4)
             self.assertEqual(event_types.count("subagent.worker.completed"), 4)

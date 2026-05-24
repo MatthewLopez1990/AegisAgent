@@ -14,48 +14,39 @@ is optional and must be started separately.
 This project is `AegisAgent`. Older `Aegis-Agent` references are historical
 design inputs, not the install target.
 
-## Quick Start
-
-```bash
-/bin/sh -c "$(curl -fsSL https://raw.githubusercontent.com/MatthewLopez1990/AegisAgent/main/scripts/install.sh)"
-export PATH="$HOME/.local/bin:$PATH"
-aegis activation
-aegis setup next
-aegis setup --run-checks
-aegis
-```
-
-`aegis` starts the terminal UI when your shell is interactive. Use `aegis tui`
-when you want the explicit command.
-
 ## Install On macOS Or Linux
 
-You need `git`, `curl`, and `python3` 3.12 or newer.
+Check prerequisites:
 
 ```bash
 python3 --version
 git --version
+```
+
+```bash
 /bin/sh -c "$(curl -fsSL https://raw.githubusercontent.com/MatthewLopez1990/AegisAgent/main/scripts/install.sh)"
 ```
 
-The installer clones GitHub into `~/.aegis-agent` and writes the command shim to
-`~/.local/bin/aegis`.
+This works on macOS and Linux. You need `git`, `curl`, and `python3` 3.12 or
+newer. The installer clones GitHub into `~/.aegis-agent` and writes the command
+shim to `~/.local/bin/aegis`.
 
-Verify the install:
+Verify the command:
 
 ```bash
+export PATH="$HOME/.local/bin:$PATH"
 command -v aegis
 aegis activation
 ```
 
-If `command -v aegis` prints nothing, add this to `~/.zshrc`, `~/.bashrc`, or
-your shell profile, then open a new terminal:
+If `command -v aegis` prints nothing, add this line to `~/.zshrc`, `~/.bashrc`,
+or your shell profile, then open a new terminal:
 
 ```bash
 export PATH="$HOME/.local/bin:$PATH"
 ```
 
-Optional installer settings:
+Optional installer settings are environment variables:
 
 ```bash
 AEGIS_INSTALL_DIR="$HOME/.aegis-agent"
@@ -67,22 +58,29 @@ AEGIS_REPO_URL="https://github.com/MatthewLopez1990/AegisAgent.git"
 
 ## Start The Agent
 
-Run the setup checks first:
+Run these once after install:
 
 ```bash
+export PATH="$HOME/.local/bin:$PATH"
+aegis activation
 aegis setup next
 aegis setup model
 aegis setup --run-checks
 ```
 
-Start the UI:
+Then start the terminal UI:
 
 ```bash
 aegis
 aegis tui
 ```
 
-Inside the UI, type normal requests:
+`aegis` starts the terminal UI when your shell is interactive. Use `aegis tui`
+when you want the explicit command.
+
+## Use The Agent
+
+Type normal requests at the prompt:
 
 ```text
 summarize this workspace
@@ -101,6 +99,7 @@ Use slash commands for direct actions:
 /tasks submit draft a safe plan
 /memory search terminal-first
 /model auth status
+/agents delegate review this workspace
 ```
 
 Commands that mutate files, git state, browser session records, or external
@@ -118,8 +117,8 @@ to show the wizard again.
 
 ## Update From GitHub
 
-Use this command to update the installed agent from GitHub onto the machine
-running it:
+Use this terminal command to update the installed agent from GitHub down to the
+computer running it:
 
 ```bash
 aegis update --approved
@@ -142,92 +141,69 @@ aegis health
 aegis audit verify
 ```
 
-## Common Terminal Commands
+## Models And Agents
 
-```bash
-aegis                         # start the terminal UI
-aegis tui                     # explicit terminal UI launch
-aegis init                    # setup quickstart alias
-aegis activation              # print terminal readiness card
-aegis commands                # show slash-command lanes
-aegis setup next              # show the next setup action
-aegis setup model             # review model route setup
-aegis setup --run-checks      # run metadata-only readiness checks
-aegis model auth status       # show read-only model auth posture
-aegis models doctor           # alias for model doctor checks
-aegis task submit "do work"   # singular alias for task queue submit
-aegis tasks --events <id>     # canonical task timeline
-aegis memory search <query>   # search local memory
-aegis memory index            # index curated memory files
-aegis connectors draft slack --target "#ops" --message "status"
-aegis connectors send slack --target "#ops" --message "status" --approved
-aegis connectors outbox       # review drafted/approved connector packets
-aegis audit verify            # verify append-only audit hash chain
-aegis update --approved       # pull latest main from GitHub
-```
-
-More commands are listed in [docs/operator-reference.md](docs/operator-reference.md).
-
-## Compatibility Aliases
-
-The canonical command is `aegis`. The Python package also exposes `aegisagent`
-for source and package workflows.
-
-These aliases are migration aids for older agent command habits. They normalize
-to current AegisAgent terminal commands before dispatch. They do not mean the old
-agent surface or Hermes command set is fully implemented.
-
-Canonical commands remain the commands to teach, document, and automate. Use the
-aliases only when an older idiom maps directly to existing terminal-only Aegis
-behavior.
-
-```bash
-aegis task list
-aegis task submit "draft a safe plan"
-aegis task status <task-id>
-aegis task timeline <task-id>
-aegis task output <task-id>
-aegis task logs <task-id>
-aegis task recover
-aegis models providers
-aegis models doctor
-aegis model auth status
-aegis model auth methods
-aegis model auth doctor
-aegis memory search <query>
-aegis memory index
-aegis setup model-auth
-aegis setup check
-aegis setup verify
-aegis setup connections
-aegis setup skills
-```
-
-Unsupported old commands such as `model auth login`, `model auth logout`,
-`task pause`, `task resume`, and old external-memory management commands are not
-implemented.
-
-Inside the TUI, root shortcuts are intentionally small:
-
-```text
-/task                       exact root alias for /tasks
-/model                      exact root alias for /model providers
-/memory                     canonical memory index/search root
-```
-
-Root shortcuts do not create singular slash subcommand families; use
-`/tasks watch`, `/model doctor`, and `/memory add` for those workflows.
-
-## Model And Secret Setup
-
-Aegis stores environment variable names for secrets, not raw secret values.
+The default provider is local and terminal-only. To use an OpenAI-compatible
+route, store the secret in your shell environment and give Aegis the environment
+variable name:
 
 ```bash
 export OPENAI_API_KEY="..."
 aegis model configure openai/gpt-5.5 --mode api_key --api-key-env OPENAI_API_KEY
 aegis model doctor
-aegis model auth status
+aegis model usage
 ```
+
+Run model-backed role workers:
+
+```bash
+aegis agents
+aegis agents contracts
+aegis agents delegate "review this workspace"
+aegis agents bg "compare implementation options"
+aegis model usage
+```
+
+`aegis agents delegate` runs planner, researcher, implementer, and reviewer
+workers through the active provider route, records isolated sessions and usage
+metadata, and falls back locally if an attempted external route fails.
+
+## Common Commands
+
+```bash
+aegis                         # start the terminal UI
+aegis activation              # print terminal readiness card
+aegis commands                # show slash-command lanes
+aegis setup next              # show the next setup action
+aegis setup --run-checks      # run metadata-only readiness checks
+aegis model doctor            # check configured model route
+aegis tasks --submit "do work"
+aegis tasks --events <id>
+aegis memory search <query>
+aegis connectors outbox
+aegis audit verify
+aegis update --approved
+```
+
+The canonical command is `aegis`. The Python package also exposes `aegisagent`
+for source and package workflows. Older compatibility aliases are documented in
+[docs/operator-reference.md](docs/operator-reference.md).
+
+Common setup aliases from older terminal habits still map to the current setup
+surface when they are read-only:
+
+```bash
+aegis setup model-auth
+aegis setup connections
+aegis setup verify
+```
+
+## Safety Model
+
+Aegis stores environment variable names for secrets, not raw secret values. It
+does not open a browser during normal terminal use. File, git, browser, and
+external-state mutations require explicit approval. Audit receipts record model
+routes, tool actions, fallbacks, and redaction state.
 
 Connector metadata follows the same pattern:
 
@@ -322,14 +298,16 @@ Hermes-class agent.
 
 Implemented: install/update lifecycle, terminal activation, TUI, terminal
 command catalog, setup checks, health checks, policy/audit receipts, typed
-workspace tools, governed git operations, task queues, automations, model-route
-metadata, connector metadata with a redacted approval-bound outbox, memory
+workspace tools, governed git operations, task queues, automations,
+OpenAI-compatible model routing for chat and role workers, scoped model usage
+ledger rows, connector metadata with a redacted approval-bound outbox, memory
 review controls, passive skill trust metadata, and local agent/subagent
-orchestration.
+orchestration with provider fallback metadata.
 
-Partial: web console parity, external model routing, live connectors,
-self-improvement, richer browser automation, and deeper agent delegation.
+Partial: web console parity, live connectors, self-improvement, richer browser
+automation, multi-provider fallback ordering, subscription bridge readiness, and
+deeper agent delegation.
 
-Next: stronger model-backed multi-agent execution, live browser control behind
-explicit approval, broader integrations, signed skill trust, and packaged
-release flows.
+Next: worker-to-worker artifacts, richer role-specific tool budgets, live
+browser control behind explicit approval, broader integrations, signed skill
+trust, and packaged release flows.

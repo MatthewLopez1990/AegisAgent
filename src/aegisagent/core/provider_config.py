@@ -286,6 +286,12 @@ class ProviderUsageStore:
         total_tokens: int | None = None,
         receipt_id: str = "",
         redacted: bool = False,
+        scope: str = "agent_turn",
+        parent_session_id: str = "",
+        subagent_root_id: str = "",
+        worker_id: str = "",
+        worker_role: str = "",
+        delegation_receipt_id: str = "",
     ) -> dict[str, Any]:
         self.usage_dir.mkdir(parents=True, exist_ok=True)
         prompt_estimate = _estimate_tokens(prompt_chars)
@@ -293,10 +299,16 @@ class ProviderUsageStore:
         payload = {
             "id": f"usage-{uuid4().hex[:12]}",
             "timestamp": datetime.now(timezone.utc).isoformat(),
+            "scope": scope,
             "provider": provider,
             "mode": mode,
             "status": status,
             "session_id": session_id,
+            "parent_session_id": parent_session_id,
+            "subagent_root_id": subagent_root_id,
+            "worker_id": worker_id,
+            "worker_role": worker_role,
+            "delegation_receipt_id": delegation_receipt_id,
             "source": source,
             "prompt_chars": prompt_chars,
             "assistant_chars": assistant_chars,
@@ -335,18 +347,26 @@ class ProviderUsageStore:
 
     def summary(self, *, limit: int = 20) -> dict[str, Any]:
         records = self.list(limit=10_000)
-        total_tokens = sum(int(record.get("total_tokens") or 0) for record in records)
-        external_calls = sum(1 for record in records if record.get("external_model_invocation_performed"))
-        providers = sorted({str(record.get("provider", "")) for record in records if record.get("provider")})
+        agent_records = [record for record in records if str(record.get("scope") or "agent_turn") == "agent_turn"]
+        worker_records = [record for record in records if str(record.get("scope") or "agent_turn") == "subagent_worker"]
+        total_tokens = sum(int(record.get("total_tokens") or 0) for record in agent_records)
+        external_calls = sum(1 for record in agent_records if record.get("external_model_invocation_performed"))
+        providers = sorted({str(record.get("provider", "")) for record in agent_records if record.get("provider")})
+        worker_total_tokens = sum(int(record.get("total_tokens") or 0) for record in worker_records)
         return {
             "usage_path": str(self.usage_path),
-            "count": len(records),
+            "count": len(agent_records),
             "total_tokens": total_tokens,
             "external_calls": external_calls,
             "providers": providers,
+            "worker_count": len(worker_records),
+            "worker_total_tokens": worker_total_tokens,
+            "worker_external_calls": sum(1 for record in worker_records if record.get("external_model_invocation_performed")),
+            "worker_providers": sorted({str(record.get("provider", "")) for record in worker_records if record.get("provider")}),
             "browser_auto_launch": False,
             "raw_secret_values_included": False,
-            "recent": records[-limit:],
+            "recent": agent_records[-limit:],
+            "worker_recent": worker_records[-limit:],
         }
 
 

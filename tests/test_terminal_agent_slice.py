@@ -15,6 +15,7 @@ from aegisagent.core.executor import GovernedExecutor
 from aegisagent.core.lifecycle import update_from_github
 from aegisagent.core.provider_config import ProviderUsageStore
 from aegisagent.core.sessions import SessionStore
+from aegisagent.core.subagents import AGENT_CONTRACT_VERSION
 from aegisagent.core.tasks import TaskRunner, TaskStore
 from aegisagent.core.workspace_tools import WorkspaceToolRunner
 from aegisagent.security.audit import AuditLog
@@ -463,8 +464,21 @@ class TerminalAgentSessionTests(unittest.TestCase):
             messages = SessionStore(paths).transcript(result.session_id)
             self.assertEqual(messages[1]["metadata"]["tool"], "subagents.delegate")
             self.assertGreaterEqual(messages[1]["metadata"]["event_count"], 10)
+            self.assertEqual(messages[1]["metadata"]["contract_version"], AGENT_CONTRACT_VERSION)
+            rows = messages[1]["metadata"]["worker_provider_metadata"]
+            self.assertEqual(len(rows), 4)
+            self.assertEqual({row["provider"] for row in rows}, {"local/terminal-v0"})
+            self.assertTrue(all(row["usage_id"].startswith("usage-") for row in rows))
+            self.assertFalse(any(row["external_model_invocation_performed"] for row in rows))
+            tool = next(item for item in result.tool_results if item["name"] == "subagents.delegate")
+            self.assertEqual(tool["metadata"]["worker_provider_metadata"], rows)
+            self.assertEqual(tool["metadata"]["worker_usage_ids"], [row["usage_id"] for row in rows])
+            self.assertEqual(tool["metadata"]["worker_providers"], ["local/terminal-v0"])
             receipts = AuditLog(paths).recent(3)
             self.assertTrue(any(receipt["event_type"] == "subagent.delegation.completed" for receipt in receipts))
+            turn = next(receipt for receipt in receipts if receipt["event_type"] == "agent.turn.completed")
+            self.assertEqual(turn["payload"]["delegated_worker_count"], 4)
+            self.assertEqual(turn["payload"]["delegated_worker_providers"], ["local/terminal-v0"])
 
 
 class GovernedShellRunnerTests(unittest.TestCase):

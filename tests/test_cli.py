@@ -1870,6 +1870,79 @@ class CliTests(unittest.TestCase):
             self.assertEqual(stopped.returncode, 0, stopped.stderr)
             self.assertEqual(len(json.loads(stopped.stdout)["stopped"]), 5)
 
+    def test_agents_delegate_routes_workers_to_ready_provider_without_browser(self):
+        seen: dict[str, object] = {"bodies": []}
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self):
+                length = int(self.headers.get("Content-Length", "0"))
+                payload = json.loads(self.rfile.read(length).decode("utf-8"))
+                seen["bodies"].append(payload)
+                body = json.dumps(
+                    {
+                        "choices": [{"message": {"content": "external worker response"}}],
+                        "usage": {"prompt_tokens": 7, "completion_tokens": 2, "total_tokens": 9},
+                    }
+                ).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, _format, *args):
+                return
+
+        server = HTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                base_url = f"http://127.0.0.1:{server.server_port}/v1"
+                configured = run_cli(
+                    "model",
+                    "configure",
+                    "openai/worker-model",
+                    "--mode",
+                    "api_key",
+                    "--api-key-env",
+                    "AEGIS_TEST_OPENAI_KEY",
+                    "--base-url",
+                    base_url,
+                    cwd=tmp,
+                    extra_env={"AEGIS_TEST_OPENAI_KEY": "test-key"},
+                )
+                self.assertEqual(configured.returncode, 0, configured.stderr)
+
+                result = run_cli("agents", "delegate", "improve terminal orchestration", cwd=tmp, extra_env={"AEGIS_TEST_OPENAI_KEY": "test-key"})
+
+                self.assertEqual(result.returncode, 0, result.stderr)
+                payload = json.loads(result.stdout)
+                self.assertEqual({worker["provider"] for worker in payload["workers"]}, {"openai/worker-model"})
+                self.assertEqual({worker["provider_mode"] for worker in payload["workers"]}, {"api_key"})
+                self.assertTrue(all(worker["external_model_invocation_performed"] for worker in payload["workers"]))
+                self.assertFalse(any(worker["fallback_used"] for worker in payload["workers"]))
+                self.assertTrue(all(worker["usage_id"].startswith("usage-") for worker in payload["workers"]))
+                sent = "\n".join(json.dumps(body) for body in seen["bodies"])
+                for role in ("planner", "researcher", "implementer", "reviewer"):
+                    self.assertIn(f"You are the {role} subagent", sent)
+
+                usage = run_cli("model", "usage", cwd=tmp)
+                self.assertEqual(usage.returncode, 0, usage.stderr)
+                usage_payload = json.loads(usage.stdout)
+                self.assertEqual(usage_payload["count"], 0)
+                self.assertEqual(usage_payload["worker_count"], 4)
+                self.assertEqual(usage_payload["worker_external_calls"], 4)
+                self.assertEqual(usage_payload["worker_providers"], ["openai/worker-model"])
+                audit = (Path(tmp) / ".aegisagent" / "audit.jsonl").read_text(encoding="utf-8")
+                self.assertIn('"external_model_invocation_performed": true', audit)
+                self.assertIn('"browser_auto_launch": false', audit)
+                self.assertNotIn("test-key", audit)
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
     def test_agents_surface_wraps_bounded_subagent_runtime(self):
         with tempfile.TemporaryDirectory() as tmp:
             status = run_cli("agents", cwd=tmp)

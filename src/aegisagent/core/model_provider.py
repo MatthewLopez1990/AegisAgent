@@ -52,7 +52,18 @@ class LocalTerminalProvider:
         else:
             lines.append("- Visible files: no non-state workspace files found in the local sample.")
 
-        if "summar" in lower and "workspace" in lower:
+        if _is_role_worker_prompt(lower):
+            role = _role_from_prompt(lower)
+            task = _task_from_role_prompt(prompt)
+            contribution = _local_role_contribution(role, task)
+            lines.extend(
+                [
+                    "",
+                    "Subagent worker contribution:",
+                    contribution,
+                ]
+            )
+        elif "summar" in lower and "workspace" in lower:
             lines.extend(
                 [
                     "",
@@ -384,6 +395,37 @@ def _first_tool_result(results: list[dict[str, Any]], name: str) -> dict[str, An
         if result.get("name") == name:
             return result
     return None
+
+
+def _is_role_worker_prompt(lower_prompt: str) -> bool:
+    return "you are the " in lower_prompt and " subagent" in lower_prompt and "deliverable:" in lower_prompt
+
+
+def _role_from_prompt(lower_prompt: str) -> str:
+    for role in ("planner", "researcher", "implementer", "reviewer"):
+        if f"you are the {role} subagent" in lower_prompt:
+            return role
+    return "worker"
+
+
+def _task_from_role_prompt(prompt: str) -> str:
+    marker = "for:"
+    index = prompt.lower().rfind(marker)
+    if index < 0:
+        return prompt.strip()[:160]
+    return prompt[index + len(marker) :].strip()[:240]
+
+
+def _local_role_contribution(role: str, task: str) -> str:
+    if role == "planner":
+        return f"Checkpoint plan with acceptance evidence and risk gates. Keep terminal-first verification ahead of browser or gateway surfaces. Task: {task}"
+    if role == "researcher":
+        return f"Evidence summary with applicable patterns, gaps, and files to inspect. Prefer typed tools, durable sessions, and audit receipts. Task: {task}"
+    if role == "implementer":
+        return f"Minimal patch plus targeted tests and docs updates. Preserve policy gates, redaction, and no-surprise external actions. Task: {task}"
+    if role == "reviewer":
+        return f"Finding list or explicit no-finding statement with residual risks. Check claims against receipts, tests, and current workspace evidence. Task: {task}"
+    return f"Concise completion summary for bounded local work. Task: {task}"
 
 
 def _tool_json(result: dict[str, Any]) -> dict[str, Any]:
