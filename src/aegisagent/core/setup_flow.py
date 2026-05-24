@@ -227,15 +227,15 @@ class SetupGuide:
             provider = ProviderStore(self.paths).summary()
             command = terminal_command_name()
             command_list = [
-                f"{command} model connect local",
+                f"{command} connect local",
                 'export OPENAI_API_KEY="..."',
-                f"{command} model connect openai",
+                f"{command} connect openai",
                 f"{command} model doctor",
             ]
             return SetupSection(
                 "model",
                 str(provider.get("mode") or "unknown"),
-                f"Active provider: {provider.get('active_provider', '')}. Choose local with no account, or export OPENAI_API_KEY and connect OpenAI. Aegis stores only the environment-variable name, never the raw key.",
+                f"Active provider: {provider.get('active_provider', '')}. Local is ready with no account. For OpenAI, export OPENAI_API_KEY, run `{command} connect openai`, then `{command} model doctor`. Aegis stores only the environment-variable name, never the raw key.",
                 tuple(command_list),
                 tuple({"name": route["name"], "status": route["status"]} for route in provider.get("routes", [])),
             )
@@ -245,7 +245,7 @@ class SetupGuide:
                 "secrets",
                 "handles_only",
                 "Secrets are referenced by handles such as environment variable names; raw secret values are not stored in setup config or audit payloads.",
-                ("export OPENAI_API_KEY=...", f"{command} model connect openai"),
+                ('export OPENAI_API_KEY="..."', f"{command} connect openai"),
                 ({"name": "raw_secret_values_included", "ok": False},),
             )
         if name == "sandbox":

@@ -388,14 +388,17 @@ def _target_bin_dir(raw_bin_dir: str) -> Path:
 
 def _shim_script(paths: RuntimePaths, command_name: str) -> str:
     workspace = str(paths.workspace)
+    python = os.environ.get("AEGIS_PYTHON", "").strip()
+    python_default = _shell_quote(python) if python else "'python3'"
     return "\n".join(
         [
             "#!/usr/bin/env sh",
             "set -eu",
             f"AEGIS_WORKSPACE={_shell_quote(workspace)}",
             f"AEGIS_COMMAND_NAME={_shell_quote(command_name)}",
+            f"AEGIS_PYTHON_DEFAULT={python_default}",
             "export AEGIS_COMMAND_NAME",
-            'AEGIS_PYTHON="${AEGIS_PYTHON:-python3}"',
+            'AEGIS_PYTHON="${AEGIS_PYTHON:-$AEGIS_PYTHON_DEFAULT}"',
             'cd "$AEGIS_WORKSPACE"',
             'PYTHONPATH="$AEGIS_WORKSPACE/src${PYTHONPATH:+:$PYTHONPATH}" exec "$AEGIS_PYTHON" -m aegisagent "$@"',
             "",

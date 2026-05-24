@@ -29,11 +29,15 @@ PY
 
 validate_branch() {
   case "$BRANCH" in
-    ""|-*|*..*|*\\*|*~*|*^*|*:*|*[\ \	]*)
+    ""|-*|.|..|HEAD|*..*|*//*|*/|*.|*.lock|*@{*|*\\*|*~*|*^*|*:*|*[\?\*\[]*|*[\ \	]*)
       echo "invalid AEGIS_BRANCH: $BRANCH" >&2
       exit 1
       ;;
   esac
+  if ! git check-ref-format --branch "$BRANCH" >/dev/null 2>&1; then
+    echo "invalid AEGIS_BRANCH: $BRANCH" >&2
+    exit 1
+  fi
 }
 
 verify_origin() {
@@ -95,19 +99,18 @@ PYTHONPATH=src "$PYTHON" -m aegisagent install shim --approved --bin-dir "$BIN_D
 echo ""
 echo "AegisAgent installed."
 echo ""
-echo "Next commands:"
+echo "Start now:"
 echo "  export PATH=\"$BIN_DIR:\$PATH\""
 echo "  command -v $COMMAND_NAME"
-echo "  $COMMAND_NAME activation"
-echo ""
-echo "Choose one model route:"
-echo "  $COMMAND_NAME model connect local"
-echo "  # or OpenAI:"
-echo "  export OPENAI_API_KEY=\"...\""
-echo "  $COMMAND_NAME model connect openai"
-echo ""
-echo "Start Aegis:"
+echo "  $COMMAND_NAME health"
 echo "  $COMMAND_NAME"
 echo ""
+echo "Connect a model route when ready:"
+echo "  $COMMAND_NAME connect local          # no account"
+echo "  $COMMAND_NAME model doctor"
+echo "  export OPENAI_API_KEY=\"...\""
+echo "  $COMMAND_NAME connect openai"
+echo "  $COMMAND_NAME model doctor"
+echo ""
 echo "Update later:"
-echo "  $COMMAND_NAME update --approved"
+echo "  $COMMAND_NAME update --approved && $COMMAND_NAME health"

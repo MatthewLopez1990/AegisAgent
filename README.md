@@ -16,49 +16,33 @@ design inputs, not the install target.
 
 ## Quick Start
 
-Step 1: install the `aegis` terminal command on macOS or Linux:
+Install the `aegis` terminal command on macOS or Linux:
 
 ```bash
 /bin/sh -c "$(curl -fsSL https://raw.githubusercontent.com/MatthewLopez1990/AegisAgent/main/scripts/install.sh)"
 ```
 
-If your shell cannot find `aegis` right away, run:
+Then run `aegis`. If your shell cannot find it yet, add `~/.local/bin` for the
+current terminal:
 
 ```bash
 export PATH="$HOME/.local/bin:$PATH"
-```
-
-Step 2: verify the command:
-
-```bash
-command -v aegis
-aegis health
-```
-
-Step 3: choose a model route.
-
-Use the built-in local route with no account:
-
-```bash
-aegis model connect local
-aegis model doctor
-```
-
-Or connect OpenAI with one environment-variable handle:
-
-```bash
-export OPENAI_API_KEY="..."
-aegis model connect openai
-aegis model doctor
-```
-
-Step 4: start Aegis:
-
-```bash
 aegis
 ```
 
-Inside the terminal UI, type a normal request or slash command:
+For model setup, choose one route:
+
+```bash
+# no account or key
+aegis connect local
+
+# OpenAI
+export OPENAI_API_KEY="..."
+aegis connect openai
+aegis model doctor
+```
+
+Inside Aegis, type normal requests or slash commands:
 
 ```text
 review this workspace
@@ -67,39 +51,39 @@ summarize README.md
 /agents delegate review this workspace
 ```
 
-Update the installed copy from GitHub later:
+Update from GitHub later:
 
 ```bash
 aegis update --approved
-aegis health
-aegis audit verify
 ```
 
 ## Install On macOS Or Linux
 
-Check prerequisites:
+Prerequisites:
 
 ```bash
 python3 --version
 git --version
+curl --version
 ```
 
 This works on macOS and Linux. You need `git`, `curl`, and `python3` 3.12 or
 newer. The installer clones GitHub into `~/.aegis-agent` and writes the command
-shim to `~/.local/bin/aegis`.
+shim to `~/.local/bin/aegis`. It does not open a browser.
 
-Install:
+Install or reinstall:
 
 ```bash
 /bin/sh -c "$(curl -fsSL https://raw.githubusercontent.com/MatthewLopez1990/AegisAgent/main/scripts/install.sh)"
 ```
 
-Verify the command:
+Verify:
 
 ```bash
 export PATH="$HOME/.local/bin:$PATH"
 command -v aegis
 aegis activation
+aegis health
 ```
 
 If `command -v aegis` prints nothing, add this line to `~/.zshrc`, `~/.bashrc`,
@@ -109,7 +93,7 @@ or your shell profile, then open a new terminal:
 export PATH="$HOME/.local/bin:$PATH"
 ```
 
-Optional installer settings are environment variables:
+Optional installer settings:
 
 ```bash
 AEGIS_INSTALL_DIR="$HOME/.aegis-agent"
@@ -117,45 +101,45 @@ AEGIS_BIN_DIR="$HOME/.local/bin"
 AEGIS_COMMAND_NAME="aegis"
 AEGIS_BRANCH="main"
 AEGIS_REPO_URL="https://github.com/MatthewLopez1990/AegisAgent.git"
+AEGIS_PYTHON="/path/to/python3.12"
 ```
+
+If you set `AEGIS_PYTHON` during install, the generated `aegis` command uses
+that Python path by default. You can still override it later by exporting a
+different `AEGIS_PYTHON`.
 
 ## Connect A Model Route
 
-Aegis stores the provider choice and an environment-variable name only. It does
-not store the raw key.
-
-Choose one.
-
-No account:
+The simple choice is local or OpenAI. Aegis stores the provider choice and the
+environment-variable name only; it does not store the raw key.
 
 ```bash
-aegis model connect local
+# no account, no network model call
+aegis connect local
 aegis model doctor
-```
 
-OpenAI:
-
-```bash
+# OpenAI
 export OPENAI_API_KEY="..."
-aegis model connect openai
+aegis connect openai
 aegis model doctor
 ```
 
-`aegis model connect openai` defaults to `openai/gpt-5.5` and the
-`OPENAI_API_KEY` environment handle.
+`aegis connect openai` is the short form of `aegis model connect openai`. It
+defaults to `openai/gpt-5.5` and the `OPENAI_API_KEY` environment handle.
 
-To keep OpenAI available in future terminals, add the export line to `~/.zshrc`,
-`~/.bashrc`, or your shell profile, then open a new terminal:
+To keep OpenAI connected in future terminals, add the export line to `~/.zshrc`,
+`~/.bashrc`, or your shell profile:
 
 ```bash
 export OPENAI_API_KEY="..."
 ```
 
-Use these only for non-default providers or models:
+Useful checks and non-default routes:
 
 ```bash
 aegis model providers
 aegis model connect openai --model gpt-5.5 --api-key-env OPENAI_API_KEY
+aegis connect openrouter --base-url https://openrouter.ai/api/v1 --model openai/gpt-4o-mini
 ```
 
 OpenAI-compatible endpoints need an environment-variable handle and their base
@@ -163,16 +147,22 @@ URL:
 
 ```bash
 export OPENROUTER_API_KEY="..."
-aegis model connect openrouter --base-url https://openrouter.ai/api/v1 --model openai/gpt-4o-mini
+aegis connect openrouter --base-url https://openrouter.ai/api/v1 --model openai/gpt-4o-mini
 aegis model doctor
 ```
 
-Auth login/logout do not launch a browser; use `aegis model connect openai` for
-the supported external provider path.
+There is no browser login step; connect providers with environment variables.
 
 ## Start The Agent
 
-Run these after install:
+Normal start:
+
+```bash
+aegis
+```
+
+For guided setup details, run `aegis setup next`. For local readiness receipts,
+run:
 
 ```bash
 export PATH="$HOME/.local/bin:$PATH"
@@ -182,7 +172,7 @@ aegis health
 aegis setup --run-checks
 ```
 
-Then start the terminal UI with either command:
+Either command starts the terminal UI:
 
 ```bash
 aegis
@@ -191,7 +181,8 @@ aegis tui
 
 `aegis` starts the terminal UI when your shell is interactive. Use `aegis tui`
 when you want the explicit command. `aegis activation` only prints readiness.
-These commands do not start the gateway, Vite, or a browser.
+These commands do not start the gateway, Vite, or a browser. On first launch,
+the setup wizard is visible but the prompt remains active.
 
 ## Use The Agent
 
@@ -207,7 +198,8 @@ run tests
 ```
 
 Inside the TUI composer, type `@` plus a partial workspace path and press `Tab`
-to complete local file and directory references. Composer path completion only
+to complete local file and directory references. Press `Ctrl+V` to insert a
+newline without sending; `Enter` sends the full prompt. Composer completion only
 lists local metadata. It does not open a browser, start the web gateway, call a
 model, read file bodies, or mutate the workspace. The final request still
 follows normal Aegis tool and approval policy.

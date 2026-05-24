@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import textwrap
 import json
 import os
 import sys
@@ -21,7 +22,7 @@ from aegisagent.core.executor import GovernedExecutor
 from aegisagent.core.improvement import ImprovementStore, format_candidate, format_candidate_diff_review, format_improvement, format_improvements, format_verification_run, improvement_summary
 from aegisagent.core.lifecycle import format_install_status, format_update_status, install_status_payload, install_terminal_shim, update_from_github
 from aegisagent.core.memory import MemoryStore, memory_files
-from aegisagent.core.provider_config import ProviderStore, ProviderUsageStore, format_provider_connect
+from aegisagent.core.provider_config import ProviderStore, ProviderUsageStore, format_provider_connect, format_provider_doctor
 from aegisagent.core.setup_flow import (
     SETUP_SECTION_CHOICES,
     SETUP_SECTIONS,
@@ -102,6 +103,14 @@ def _add_model_arguments(model_parser: argparse.ArgumentParser) -> None:
     model_parser.add_argument("--model", default="", help="Model name for `model connect openai`. Defaults to gpt-5.5.")
     model_parser.add_argument("--inactive", action="store_true", help="Save the route without making it active.")
     model_parser.add_argument("--limit", type=int, default=20, help="Limit recent model usage rows.")
+
+
+def _add_connect_arguments(connect_parser: argparse.ArgumentParser) -> None:
+    connect_parser.add_argument("name", nargs="?", default="openai", help="Provider to connect: local, openai, or an OpenAI-compatible name.")
+    connect_parser.add_argument("--api-key-env", default="", help="Environment variable name that holds the provider key; raw values are never stored.")
+    connect_parser.add_argument("--base-url", default="", help="Provider base URL for OpenAI-compatible providers.")
+    connect_parser.add_argument("--model", default="", help="Model name. OpenAI defaults to gpt-5.5.")
+    connect_parser.add_argument("--inactive", action="store_true", help="Save the route without making it active.")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -213,10 +222,21 @@ def build_parser() -> argparse.ArgumentParser:
     chat.add_argument("--session", default="main", help="Session id or main.")
     chat.add_argument("--json", action="store_true", help="Emit the turn result as JSON.")
 
-    model = sub.add_parser("model", help="Inspect or configure terminal model provider routes.")
+    model_examples = textwrap.dedent(
+        """\
+        examples:
+          aegis model connect local
+          export OPENAI_API_KEY="sk-..." && aegis model connect openai
+          aegis model doctor
+          aegis model connect openrouter --base-url https://openrouter.ai/api/v1 --model openai/gpt-4o-mini
+        """
+    )
+    model = sub.add_parser("model", help="Inspect or configure terminal model provider routes.", epilog=model_examples, formatter_class=argparse.RawDescriptionHelpFormatter)
     _add_model_arguments(model)
-    models = sub.add_parser("models", help="Compatibility alias for model provider routes.")
+    models = sub.add_parser("models", help="Compatibility alias for model provider routes.", epilog=model_examples, formatter_class=argparse.RawDescriptionHelpFormatter)
     _add_model_arguments(models)
+    connect = sub.add_parser("connect", help="Shortcut for `aegis model connect`.")
+    _add_connect_arguments(connect)
 
     connectors = sub.add_parser("connectors", help="Inspect connectors, configure approved webhook delivery, or record metadata-only adapter packets.")
     connectors.add_argument("connector_command", nargs="?", default="list", choices=["list", "doctor", "configure", "draft", "send", "outbox"], help="Connector command to run.")
@@ -451,17 +471,18 @@ def main(argv: list[str] | None = None) -> int:
         return 0 if result.status == "ok" else 1
 
     if args.command == "health":
+        audit_result = audit.verify()
         result = {
-            "ok": True,
+            "ok": bool(audit_result["ok"]),
             "version": __version__,
             "workspace": str(paths.workspace),
-            "audit_chain_ok": audit.verify()["ok"],
+            "audit_chain_ok": audit_result["ok"],
             "sandbox": detect_sandbox().to_dict(),
             "tools": enabled_counts(),
             "memory_files": [str(path) for path in memory_files(paths)],
         }
         print(json.dumps(result, indent=2))
-        return 0
+        return 0 if result["ok"] else 1
 
     if args.command == "audit":
         if args.audit_command == "verify":
@@ -706,12 +727,29 @@ def main(argv: list[str] | None = None) -> int:
             print(f"audit receipt: {result.receipt_id}")
         return 0
 
+    if args.command == "connect":
+        providers = ProviderStore(paths)
+        try:
+            payload = providers.connect(
+                args.name or "openai",
+                model=args.model,
+                api_key_env=args.api_key_env,
+                base_url=args.base_url,
+                active=not args.inactive,
+                source="cli",
+            )
+        except ValueError as exc:
+            parser.error(str(exc))
+        print(json.dumps(payload, indent=2) if args.json else format_provider_connect(payload))
+        return 0
+
     if args.command in {"model", "models"}:
         providers = ProviderStore(paths)
         if args.model_command == "providers":
             print(json.dumps(providers.summary(), indent=2))
         elif args.model_command == "doctor":
-            print(json.dumps(providers.doctor(), indent=2))
+            payload = providers.doctor()
+            print(json.dumps(payload, indent=2) if args.json else format_provider_doctor(payload))
         elif args.model_command == "usage":
             print(json.dumps(ProviderUsageStore(paths).summary(limit=args.limit), indent=2))
         elif args.model_command == "auth":

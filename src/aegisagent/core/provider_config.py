@@ -384,6 +384,38 @@ def format_provider_connect(payload: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def format_provider_doctor(payload: dict[str, Any]) -> str:
+    route = payload.get("route") if isinstance(payload.get("route"), dict) else {}
+    checks = payload.get("checks") if isinstance(payload.get("checks"), list) else []
+    ok_count = sum(1 for check in checks if isinstance(check, dict) and check.get("ok"))
+    lines = [
+        "AEGIS MODEL DOCTOR",
+        f"active    {payload.get('active_provider', '')}",
+        f"mode      {route.get('mode', '')}",
+    ]
+    env_handle = str(route.get("api_key_env") or "")
+    if env_handle:
+        env_check = next((check for check in checks if isinstance(check, dict) and check.get("name") == "api_key_env"), {})
+        lines.append(f"env       {env_handle} ({'present' if env_check.get('ok') else 'missing'})")
+    lines.extend(
+        [
+            f"checks    {ok_count}/{len(checks)} ok",
+            "raw_secret_values_included: false",
+            "browser_auto_launch: false",
+            "external_action_started: false",
+            "",
+        ]
+    )
+    for check in checks:
+        if not isinstance(check, dict):
+            continue
+        status = "ok" if check.get("ok") else "needs attention"
+        lines.append(f"- {check.get('name', '')}: {status} - {check.get('detail', '')}")
+    if payload.get("receipt"):
+        lines.extend(["", f"audit receipt: {payload['receipt']}"])
+    return "\n".join(lines)
+
+
 class ProviderUsageStore:
     def __init__(self, paths: RuntimePaths):
         self.paths = paths

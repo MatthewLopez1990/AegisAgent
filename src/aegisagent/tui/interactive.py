@@ -25,7 +25,7 @@ from aegisagent.core.executor import GovernedExecutor
 from aegisagent.core.improvement import ImprovementStore, format_candidate, format_candidate_diff_review, format_improvement, format_improvements, format_verification_run, improvement_summary
 from aegisagent.core.lifecycle import format_install_status, format_update_status, install_status_payload, install_terminal_shim, update_from_github
 from aegisagent.core.memory import MemoryStore
-from aegisagent.core.provider_config import ProviderStore, ProviderUsageStore, format_provider_connect
+from aegisagent.core.provider_config import ProviderStore, ProviderUsageStore, format_provider_connect, format_provider_doctor
 from aegisagent.core.sessions import SessionStore
 from aegisagent.core.setup_flow import (
     SETUP_SECTIONS,
@@ -636,7 +636,7 @@ class _CursesAegisAgent:
         show_setup = setup_wizard_preferences(paths)["show_by_default"]
         self.active_menu: str | None = "setup" if view == "setup" or (view == "command" and show_setup) else "tools" if view == "tools" else None
         self.output_lines = _initial_output_lines(paths, setup_open=self.active_menu == "setup")
-        self.message = "Enter send | / palette | Tab complete | arrows history | q or /exit quit"
+        self.message = "Enter send | Ctrl+V newline | Tab complete | Home/End | Ctrl+U clear-left"
         self._panel_item_bounds: list[tuple[PanelBounds, InteractiveItem]] = []
         self._last_palette_top = 0
         self._last_palette_rows = 0
@@ -681,6 +681,22 @@ class _CursesAegisAgent:
                 return
             if key in (10, 13, getattr(self.curses, "KEY_ENTER", 343)):
                 self._submit_input()
+                continue
+            if key == 22:
+                self._insert("\n")
+                self.message = "Inserted newline. Enter still sends the full prompt."
+                continue
+            if key in (getattr(self.curses, "KEY_HOME", 262), 1):
+                self.cursor = 0
+                continue
+            if key in (getattr(self.curses, "KEY_END", 360), 5):
+                self.cursor = len(self.input_buffer)
+                continue
+            if key == 21:
+                self.input_buffer = self.input_buffer[self.cursor :]
+                self.cursor = 0
+                self.palette_index = 0
+                self.message = "Cleared input before cursor."
                 continue
             if key in (getattr(self.curses, "KEY_BACKSPACE", 263), 127, 8):
                 self._backspace()
@@ -1416,7 +1432,7 @@ def dispatch_interactive_command(command: str, paths: RuntimePaths) -> str:
         print("Usage: /model auth status | /model auth methods | /model auth doctor")
         return "models"
     if command in {"/model doctor", "/models doctor", "/provider doctor"} or command.startswith("/model doctor") or command.startswith("/models doctor"):
-        print_json(ProviderStore(paths).doctor())
+        print(format_provider_doctor(ProviderStore(paths).doctor()))
         return "models"
     if command in {"/model usage", "/models usage", "/provider usage"} or command.startswith("/model usage") or command.startswith("/models usage"):
         limit_text = command.split(maxsplit=2)[2] if len(command.split(maxsplit=2)) == 3 else ""
@@ -2380,10 +2396,12 @@ def workspace_context_path_candidates(paths: RuntimePaths, buffer: str, cursor: 
 def composer_prompt_layout(buffer: str, cursor: int, *, width: int, max_rows: int | None = None) -> tuple[list[str], int, int]:
     prompt = "aegis> "
     wrap_width = max(8, width - 1)
-    full = prompt + buffer
-    rows = textwrap.wrap(full, width=wrap_width, replace_whitespace=False, drop_whitespace=False, break_long_words=True, break_on_hyphens=False) or [prompt]
-    cursor_prefix = full[: len(prompt) + max(0, min(cursor, len(buffer)))]
-    cursor_rows = textwrap.wrap(cursor_prefix, width=wrap_width, replace_whitespace=False, drop_whitespace=False, break_long_words=True, break_on_hyphens=False) or [""]
+    indent = " " * len(prompt)
+    display = prompt + buffer.replace("\n", "\n" + indent)
+    rows = _wrap_composer_text(display, wrap_width) or [prompt]
+    cursor_buffer = buffer[: max(0, min(cursor, len(buffer)))]
+    cursor_prefix = prompt + cursor_buffer.replace("\n", "\n" + indent)
+    cursor_rows = _wrap_composer_text(cursor_prefix, wrap_width) or [""]
     first_visible = max(0, len(rows) - max_rows) if max_rows else 0
     visible = rows[first_visible:]
     if first_visible:
@@ -2391,6 +2409,13 @@ def composer_prompt_layout(buffer: str, cursor: int, *, width: int, max_rows: in
     cursor_row = max(0, min(len(visible) - 1, len(cursor_rows) - 1 - first_visible))
     cursor_col = len(cursor_rows[-1]) if len(cursor_rows) - 1 >= first_visible else len(visible[cursor_row])
     return visible, cursor_row, cursor_col
+
+
+def _wrap_composer_text(text: str, width: int) -> list[str]:
+    rows: list[str] = []
+    for segment in text.split("\n"):
+        rows.extend(textwrap.wrap(segment, width=width, replace_whitespace=False, drop_whitespace=False, break_long_words=True, break_on_hyphens=False) or [""])
+    return rows
 
 
 def _context_path_token_bounds(buffer: str, cursor: int) -> tuple[int, int] | None:

@@ -66,6 +66,21 @@ class CliTests(unittest.TestCase):
         self.assertEqual(scripts["aegisagent"], "aegisagent.cli:main")
         self.assertEqual(scripts["aegis"], "aegisagent.cli:main")
 
+    def test_model_help_and_connect_shortcut_are_onboarding_friendly(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            help_result = run_cli("model", "--help", cwd=tmp)
+            self.assertEqual(help_result.returncode, 0, help_result.stderr)
+            self.assertIn("examples:", help_result.stdout)
+            self.assertIn("aegis model connect local", help_result.stdout)
+            self.assertIn("aegis model connect openai", help_result.stdout)
+
+            connected = run_cli("--json", "connect", "openai", cwd=tmp, extra_env={"OPENAI_API_KEY": "test-key"})
+            self.assertEqual(connected.returncode, 0, connected.stderr)
+            payload = json.loads(connected.stdout)
+            self.assertEqual(payload["provider"], "openai/gpt-5.5")
+            self.assertEqual(payload["env_handle"], "OPENAI_API_KEY")
+            self.assertTrue(payload["env_present"])
+
     def test_mac_linux_installer_scripts_are_terminal_first(self):
         install = Path("scripts/install.sh")
         update = Path("scripts/update.sh")
@@ -82,20 +97,23 @@ class CliTests(unittest.TestCase):
         self.assertIn("status --porcelain", install_text)
         self.assertIn("canonical_repo_url", install_text)
         self.assertIn("invalid AEGIS_BRANCH", install_text)
+        self.assertIn("git check-ref-format --branch", install_text)
         self.assertIn("require_python_version", install_text)
         self.assertIn("AEGIS_PYTHON", install_text)
         self.assertIn("minimum = (3, 12)", install_text)
         self.assertIn("python3 3.12 or newer is required", install_text)
         self.assertLess(install_text.index("require_python_version"), install_text.index("git clone --branch"))
         self.assertIn('"$PYTHON" -m aegisagent install shim --approved', install_text)
-        self.assertIn("$COMMAND_NAME model connect local", install_text)
+        self.assertIn("$COMMAND_NAME connect local", install_text)
         self.assertIn("export OPENAI_API_KEY", install_text)
-        self.assertIn("$COMMAND_NAME model connect openai", install_text)
+        self.assertIn("$COMMAND_NAME connect openai", install_text)
+        self.assertIn("$COMMAND_NAME model doctor", install_text)
         self.assertIn("git -C \"$INSTALL_DIR\" pull --ff-only origin \"$BRANCH\"", update_text)
         self.assertIn("remote get-url origin", update_text)
         self.assertIn("status --porcelain", update_text)
         self.assertIn("canonical_repo_url", update_text)
         self.assertIn("invalid AEGIS_BRANCH", update_text)
+        self.assertIn("git check-ref-format --branch", update_text)
         self.assertIn("require_python_version", update_text)
         self.assertIn("AEGIS_PYTHON", update_text)
         self.assertIn("minimum = (3, 12)", update_text)
@@ -134,16 +152,19 @@ class CliTests(unittest.TestCase):
         self.assertIn('/bin/sh -c "$(curl -fsSL https://raw.githubusercontent.com/MatthewLopez1990/AegisAgent/main/scripts/install.sh)"', readme)
         self.assertIn("python3 --version", readme)
         self.assertIn("git --version", readme)
+        self.assertIn("curl --version", readme)
         self.assertIn("command -v aegis", readme)
         self.assertIn("aegis activation", readme)
+        self.assertIn('AEGIS_PYTHON="/path/to/python3.12"', readme)
         connect_section = readme[connect_index:start_index]
+        self.assertIn("aegis connect openai", connect_section)
+        self.assertIn("aegis connect local", connect_section)
         self.assertIn("aegis model connect openai", connect_section)
-        self.assertIn("aegis model connect local", connect_section)
         self.assertIn("aegis model doctor", connect_section)
         self.assertIn("aegis model providers", connect_section)
         self.assertIn('export OPENAI_API_KEY="..."', connect_section)
         self.assertIn("aegis model connect openai --model gpt-5.5 --api-key-env OPENAI_API_KEY", connect_section)
-        self.assertIn("aegis model connect openrouter --base-url https://openrouter.ai/api/v1 --model openai/gpt-4o-mini", connect_section)
+        self.assertIn("aegis connect openrouter --base-url https://openrouter.ai/api/v1 --model openai/gpt-4o-mini", connect_section)
         self.assertNotIn("aegis model configure", connect_section)
         self.assertNotIn("subscription_cli", connect_section)
         self.assertNotIn("model auth login", connect_section)
@@ -235,8 +256,9 @@ class CliTests(unittest.TestCase):
             install = subprocess.run(["sh", "scripts/install.sh"], text=True, capture_output=True, check=False, env=env)
             self.assertEqual(install.returncode, 0, install.stderr)
             self.assertIn("AegisAgent installed.", install.stdout)
-            self.assertIn("aegis model connect local", install.stdout)
-            self.assertIn("aegis model connect openai", install.stdout)
+            self.assertIn("aegis connect local", install.stdout)
+            self.assertIn("aegis connect openai", install.stdout)
+            self.assertIn("aegis model doctor", install.stdout)
             command_lookup = subprocess.run(["sh", "-c", "command -v aegis"], text=True, capture_output=True, check=False, env=env)
             self.assertEqual(command_lookup.returncode, 0, command_lookup.stderr)
             self.assertEqual(Path(command_lookup.stdout.strip()).resolve(), (bin_dir / "aegis").resolve())
@@ -246,6 +268,8 @@ class CliTests(unittest.TestCase):
                 ("activation", ["aegis", "activation"]),
                 ("setup next", ["aegis", "setup", "next"]),
                 ("setup model", ["aegis", "setup", "model"]),
+                ("connect local", ["aegis", "connect", "local"]),
+                ("connect openai", ["aegis", "connect", "openai"]),
                 ("model connect local", ["aegis", "model", "connect", "local"]),
                 ("model connect openai", ["aegis", "model", "connect", "openai"]),
                 ("model doctor", ["aegis", "model", "doctor"]),
@@ -269,9 +293,12 @@ class CliTests(unittest.TestCase):
             self.assertIn("browser_auto_launch: false", outputs["activation"])
             self.assertIn("browser_auto_launch: false", outputs["setup next"])
             self.assertIn("browser_auto_launch: false", outputs["setup model"])
+            self.assertIn("AEGIS MODEL CONNECT", outputs["connect local"])
+            self.assertIn("OPENAI_API_KEY", outputs["connect openai"])
             self.assertIn("AEGIS MODEL CONNECT", outputs["model connect local"])
             self.assertIn("local/terminal-v0", outputs["model connect local"])
             self.assertIn("OPENAI_API_KEY", outputs["model connect openai"])
+            self.assertIn("AEGIS MODEL DOCTOR", outputs["model doctor"])
             self.assertIn("metadata_only", outputs["model doctor"])
             self.assertIn("openai/gpt-5.5", outputs["model connect custom"])
             self.assertIn('"status": "unsupported"', outputs["model auth login"])
@@ -655,8 +682,8 @@ class CliTests(unittest.TestCase):
         self.assertIn("start here aegis-test setup next", result.stdout)
         self.assertIn("opens      aegis-test setup model", result.stdout)
         self.assertIn("aegis-test setup --run-checks", result.stdout)
-        self.assertIn("aegis-test model connect local", result.stdout)
-        self.assertIn("export OPENAI_API_KEY=...", result.stdout)
+        self.assertIn("aegis-test connect local", result.stdout)
+        self.assertIn('export OPENAI_API_KEY="..."', result.stdout)
         self.assertIn("No browser is launched by setup", result.stdout)
 
     def test_setup_next_returns_priority_step_state_without_browser(self):
@@ -779,6 +806,7 @@ class CliTests(unittest.TestCase):
             self.assertIn(str(Path(tmp).resolve()), script)
             self.assertIn("-m aegisagent", script)
             self.assertIn("AEGIS_COMMAND_NAME='aegis-test'", script)
+            self.assertIn('AEGIS_PYTHON="${AEGIS_PYTHON:-', script)
             audit = (Path(tmp) / ".aegisagent" / "audit.jsonl").read_text(encoding="utf-8")
             self.assertIn("lifecycle.install", audit)
             self.assertIn('"browser_auto_launch": false', audit)
@@ -789,16 +817,21 @@ class CliTests(unittest.TestCase):
             workspace.mkdir()
             (workspace / "src").symlink_to((Path.cwd() / "src").resolve(), target_is_directory=True)
             bin_dir = Path(tmp) / "bin"
-            installed = run_cli("install", "shim", "--bin-dir", str(bin_dir), "--name", "aegis-test", "--approved", cwd=str(workspace))
+            installed = run_cli("install", "shim", "--bin-dir", str(bin_dir), "--name", "aegis-test", "--approved", cwd=str(workspace), extra_env={"AEGIS_PYTHON": sys.executable})
             self.assertEqual(installed.returncode, 0, installed.stderr)
 
             shim = bin_dir / "aegis-test"
+            script = shim.read_text(encoding="utf-8")
+            self.assertIn(f"AEGIS_PYTHON_DEFAULT='{sys.executable}'", script)
+            run_env = {**os.environ, "PATH": os.environ.get("PATH", "")}
+            run_env.pop("AEGIS_PYTHON", None)
+            run_env.pop("PYTHONPATH", None)
             result = subprocess.run(
                 [str(shim), "activation"],
                 text=True,
                 capture_output=True,
                 check=False,
-                env={"AEGIS_PYTHON": sys.executable, "PYTHONPATH": "src"},
+                env=run_env,
             )
 
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -1040,6 +1073,14 @@ class CliTests(unittest.TestCase):
             self.assertTrue(json.loads(health.stdout)["ok"])
             audit = run_cli("audit", "verify", cwd=tmp)
             self.assertEqual(audit.returncode, 0, audit.stderr)
+            audit_path = Path(tmp) / ".aegisagent" / "audit.jsonl"
+            audit_text = audit_path.read_text(encoding="utf-8")
+            audit_path.write_text(audit_text.replace('"event_type"', '"tampered"', 1), encoding="utf-8")
+            broken_health = run_cli("health", cwd=tmp)
+            self.assertEqual(broken_health.returncode, 1)
+            broken_payload = json.loads(broken_health.stdout)
+            self.assertFalse(broken_payload["ok"])
+            self.assertFalse(broken_payload["audit_chain_ok"])
 
     def test_tools_denies_destructive_command(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1659,7 +1700,11 @@ class CliTests(unittest.TestCase):
 
             doctor = run_cli("model", "doctor", cwd=tmp)
             self.assertEqual(doctor.returncode, 0, doctor.stderr)
-            checks = json.loads(doctor.stdout)["checks"]
+            self.assertIn("AEGIS MODEL DOCTOR", doctor.stdout)
+            self.assertIn("checks", doctor.stdout)
+            doctor_json = run_cli("--json", "model", "doctor", cwd=tmp)
+            self.assertEqual(doctor_json.returncode, 0, doctor_json.stderr)
+            checks = json.loads(doctor_json.stdout)["checks"]
             self.assertTrue(next(check for check in checks if check["name"] == "metadata_only")["ok"])
             self.assertFalse(next(check for check in checks if check["name"] == "api_key_env")["ok"])
             audit = (Path(tmp) / ".aegisagent" / "audit.jsonl").read_text(encoding="utf-8")
@@ -1692,6 +1737,13 @@ class CliTests(unittest.TestCase):
             self.assertEqual(doctor.returncode, 0, doctor.stderr)
             doctor_payload = json.loads(doctor.stdout)
             self.assertTrue(next(check for check in doctor_payload["checks"] if check["name"] == "metadata_only")["ok"])
+
+            model_doctor = run_cli("models", "doctor", cwd=tmp)
+            self.assertEqual(model_doctor.returncode, 0, model_doctor.stderr)
+            self.assertIn("AEGIS MODEL DOCTOR", model_doctor.stdout)
+            model_doctor_json = run_cli("--json", "models", "doctor", cwd=tmp)
+            self.assertEqual(model_doctor_json.returncode, 0, model_doctor_json.stderr)
+            self.assertTrue(next(check for check in json.loads(model_doctor_json.stdout)["checks"] if check["name"] == "metadata_only")["ok"])
 
             usage = run_cli("models", "usage", cwd=tmp)
             self.assertEqual(usage.returncode, 0, usage.stderr)

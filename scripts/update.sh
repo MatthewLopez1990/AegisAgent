@@ -29,11 +29,15 @@ PY
 
 validate_branch() {
   case "$BRANCH" in
-    ""|-*|*..*|*\\*|*~*|*^*|*:*|*[\ \	]*)
+    ""|-*|.|..|HEAD|*..*|*//*|*/|*.|*.lock|*@{*|*\\*|*~*|*^*|*:*|*[\?\*\[]*|*[\ \	]*)
       echo "invalid AEGIS_BRANCH: $BRANCH" >&2
       exit 1
       ;;
   esac
+  if ! git check-ref-format --branch "$BRANCH" >/dev/null 2>&1; then
+    echo "invalid AEGIS_BRANCH: $BRANCH" >&2
+    exit 1
+  fi
 }
 
 canonical_repo_url() {
@@ -88,4 +92,5 @@ PYTHONPATH=src "$PYTHON" -m aegisagent install shim --approved --bin-dir "$BIN_D
 echo ""
 echo "AegisAgent updated."
 echo "Run: $COMMAND_NAME"
+echo "Verify: $COMMAND_NAME health && $COMMAND_NAME audit verify"
 echo "Update again: $COMMAND_NAME update --approved"

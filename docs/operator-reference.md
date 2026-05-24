@@ -215,6 +215,16 @@ completion scripts for terminal commands. Composer `@path` completion is local
 metadata only: it does not read file bodies, call a model, open a browser, start
 the gateway, use the network, or mutate files.
 
+Composer editing keys:
+
+```text
+Enter       send the full prompt
+Ctrl+V      insert a newline without sending
+Home/End    jump to the start or end of the prompt
+Ctrl+U      clear text before the cursor
+Tab         complete slash commands or @path references
+```
+
 ## Model And Connector Metadata
 
 ```bash

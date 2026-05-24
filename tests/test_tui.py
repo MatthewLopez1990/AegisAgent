@@ -470,6 +470,174 @@ class TuiRendererTests(unittest.TestCase):
         self.assertEqual("".join(lines), "aegis> " + buffer)
         self.assertEqual((cursor_row, cursor_col), divmod(len("aegis> ") + len(buffer), 39))
 
+    def test_composer_prompt_layout_preserves_explicit_newlines(self):
+        buffer = "line one\nline two"
+
+        lines, cursor_row, cursor_col = composer_prompt_layout(buffer, len(buffer), width=40)
+
+        self.assertEqual(lines, ["aegis> line one", "       line two"])
+        self.assertEqual((cursor_row, cursor_col), (1, len("       line two")))
+
+        _lines, cursor_row, cursor_col = composer_prompt_layout("abc\ndef", 4, width=80)
+        self.assertEqual((cursor_row, cursor_col), (1, len("aegis> ")))
+
+    def test_live_tui_ctrl_v_submits_multiline_prompt(self):
+        class FakeCurses:
+            A_BOLD = 0
+            ALL_MOUSE_EVENTS = 0
+            KEY_ENTER = 343
+            KEY_BACKSPACE = 263
+            KEY_LEFT = 260
+            KEY_RIGHT = 261
+            KEY_UP = 259
+            KEY_DOWN = 258
+            KEY_BTAB = 353
+            KEY_MOUSE = 409
+            KEY_HOME = 262
+            KEY_END = 360
+            COLOR_CYAN = 0
+            COLOR_MAGENTA = 0
+            COLOR_BLACK = 0
+            COLOR_WHITE = 0
+            COLOR_YELLOW = 0
+            COLOR_GREEN = 0
+            COLOR_RED = 0
+
+            @staticmethod
+            def color_pair(_number: int) -> int:
+                return 0
+
+            @staticmethod
+            def curs_set(_value: int) -> None:
+                return None
+
+            @staticmethod
+            def has_colors() -> bool:
+                return False
+
+            @staticmethod
+            def mousemask(_value: int) -> None:
+                return None
+
+        class FakeScreen:
+            def __init__(self) -> None:
+                self.keys = [ord("h"), 22, ord("i"), 10, 27]
+
+            def keypad(self, _enabled: bool) -> None:
+                return None
+
+            def timeout(self, _timeout: int) -> None:
+                return None
+
+            def getch(self) -> int:
+                return self.keys.pop(0)
+
+            def getmaxyx(self) -> tuple[int, int]:
+                return (32, 100)
+
+            def erase(self) -> None:
+                return None
+
+            def addstr(self, *_args: object) -> None:
+                return None
+
+            def refresh(self) -> None:
+                return None
+
+            def move(self, *_args: object) -> None:
+                return None
+
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = runtime_paths(tmp)
+            deck = _CursesAegisAgent(FakeScreen(), paths, FakeCurses)
+            deck.run()
+
+            session_text = next(paths.sessions_dir.glob("main-*.json")).read_text(encoding="utf-8")
+
+        self.assertIn("h\\ni", session_text)
+        self.assertTrue(any("Provider note" in line for line in deck.output_lines))
+
+    def test_live_tui_multiline_editing_keys_keep_input_open(self):
+        class FakeCurses:
+            A_BOLD = 0
+            ALL_MOUSE_EVENTS = 0
+            KEY_ENTER = 343
+            KEY_BACKSPACE = 263
+            KEY_LEFT = 260
+            KEY_RIGHT = 261
+            KEY_UP = 259
+            KEY_DOWN = 258
+            KEY_BTAB = 353
+            KEY_MOUSE = 409
+            KEY_HOME = 262
+            KEY_END = 360
+            COLOR_CYAN = 0
+            COLOR_MAGENTA = 0
+            COLOR_BLACK = 0
+            COLOR_WHITE = 0
+            COLOR_YELLOW = 0
+            COLOR_GREEN = 0
+            COLOR_RED = 0
+
+            @staticmethod
+            def color_pair(_number: int) -> int:
+                return 0
+
+            @staticmethod
+            def curs_set(_value: int) -> None:
+                return None
+
+            @staticmethod
+            def has_colors() -> bool:
+                return False
+
+            @staticmethod
+            def mousemask(_value: int) -> None:
+                return None
+
+        class FakeScreen:
+            def __init__(self, keys: list[int]) -> None:
+                self.keys = keys
+
+            def keypad(self, _enabled: bool) -> None:
+                return None
+
+            def timeout(self, _timeout: int) -> None:
+                return None
+
+            def getch(self) -> int:
+                return self.keys.pop(0)
+
+            def getmaxyx(self) -> tuple[int, int]:
+                return (32, 100)
+
+            def erase(self) -> None:
+                return None
+
+            def addstr(self, *_args: object) -> None:
+                return None
+
+            def refresh(self) -> None:
+                return None
+
+            def move(self, *_args: object) -> None:
+                return None
+
+        with tempfile.TemporaryDirectory() as tmp:
+            newline_deck = _CursesAegisAgent(FakeScreen([ord("a"), 22, ord("b"), 4]), runtime_paths(tmp), FakeCurses)
+            newline_deck.run()
+            edit_deck = _CursesAegisAgent(FakeScreen([ord("a"), ord("b"), FakeCurses.KEY_HOME, ord(">"), FakeCurses.KEY_END, ord("!"), 4]), runtime_paths(tmp), FakeCurses)
+            edit_deck.run()
+            clear_deck = _CursesAegisAgent(FakeScreen([ord("a"), ord("b"), FakeCurses.KEY_HOME, ord(">"), FakeCurses.KEY_END, ord("!"), 21, 4]), runtime_paths(tmp), FakeCurses)
+            clear_deck.run()
+
+        self.assertEqual(newline_deck.input_buffer, "a\nb")
+        self.assertEqual(newline_deck.cursor, 3)
+        self.assertEqual(edit_deck.input_buffer, ">ab!")
+        self.assertEqual(edit_deck.cursor, len(">ab!"))
+        self.assertEqual(clear_deck.input_buffer, "")
+        self.assertEqual(clear_deck.cursor, 0)
+
     def test_interactive_dispatch_runs_local_agent_turn(self):
         with tempfile.TemporaryDirectory() as tmp:
             paths = runtime_paths(tmp)
@@ -696,7 +864,7 @@ class TuiRendererTests(unittest.TestCase):
 
             self.assertEqual(result, "setup")
             self.assertIn("AEGIS SETUP :: model", setup_model.getvalue())
-            self.assertIn("aegis model connect openai", setup_model.getvalue())
+            self.assertIn("aegis connect openai", setup_model.getvalue())
             self.assertIn('export OPENAI_API_KEY="..."', setup_model.getvalue())
             self.assertNotIn("aegis model configure", setup_model.getvalue())
 
@@ -706,7 +874,7 @@ class TuiRendererTests(unittest.TestCase):
 
             self.assertEqual(result, "setup")
             self.assertIn("AEGIS SETUP :: model", setup_model_auth.getvalue())
-            self.assertIn("aegis model connect local", setup_model_auth.getvalue())
+            self.assertIn("aegis connect local", setup_model_auth.getvalue())
             self.assertNotIn("aegis model configure", setup_model_auth.getvalue())
 
             setup_next = io.StringIO()

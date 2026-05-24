@@ -86,10 +86,16 @@ class AuditLog:
                 fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
 
     def verify(self) -> dict:
-        entries = self._load_entries()
+        try:
+            entries = self._load_entries()
+        except (json.JSONDecodeError, TypeError) as exc:
+            return {"ok": False, "count": 0, "failed_index": 0, "error": f"malformed audit entry: {exc}"}
         previous = GENESIS_HASH
         for index, entry in enumerate(entries):
-            receipt = {key: entry[key] for key in ("id", "created_at", "event_type", "payload")}
+            try:
+                receipt = {key: entry[key] for key in ("id", "created_at", "event_type", "payload")}
+            except (KeyError, TypeError) as exc:
+                return {"ok": False, "count": len(entries), "failed_index": index, "error": f"malformed audit entry: {exc}"}
             expected = _entry_hash(previous, receipt)
             if entry.get("previous_hash") != previous or entry.get("entry_hash") != expected:
                 return {"ok": False, "count": len(entries), "failed_index": index, "expected_hash": expected}
