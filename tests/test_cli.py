@@ -68,6 +68,36 @@ class CliTests(unittest.TestCase):
             syntax = subprocess.run(["sh", "-n", str(script)], text=True, capture_output=True, check=False)
             self.assertEqual(syntax.returncode, 0, syntax.stderr)
 
+    def test_readme_leads_with_installed_user_terminal_flow(self):
+        readme = Path("README.md").read_text(encoding="utf-8")
+
+        install_index = readme.index("## Install On macOS Or Linux")
+        start_index = readme.index("## Start The Agent")
+        update_index = readme.index("## Update From GitHub")
+        develop_index = readme.index("## Develop From Source")
+        self.assertLess(install_index, start_index)
+        self.assertLess(start_index, update_index)
+        self.assertLess(update_index, develop_index)
+
+        self.assertIn('/bin/sh -c "$(curl -fsSL https://raw.githubusercontent.com/MatthewLopez1990/AegisAgent/main/scripts/install.sh)"', readme)
+        self.assertIn("python3 --version", readme)
+        self.assertIn("git --version", readme)
+        self.assertIn("command -v aegis", readme)
+        self.assertIn("aegis activation", readme)
+        self.assertIn("aegis setup next", readme[start_index:update_index])
+        self.assertIn("aegis setup model", readme[start_index:update_index])
+        self.assertIn("aegis setup --run-checks", readme[start_index:update_index])
+        self.assertIn("aegis update --approved", readme)
+        self.assertIn("~/.aegis-agent/scripts/update.sh", readme)
+        self.assertIn("aegis", readme[install_index:start_index])
+        self.assertIn("setup wizard", readme[start_index:update_index])
+        self.assertIn("/setup next", readme[start_index:update_index])
+        self.assertIn("/setup hide", readme[start_index:update_index])
+        self.assertIn("/setup reset", readme[start_index:update_index])
+        self.assertIn("| approve", readme[start_index:update_index])
+        self.assertIn("does not launch a browser", readme)
+        self.assertIn("[docs/operator-reference.md](docs/operator-reference.md)", readme)
+
     def test_skills_cli_reports_trust_summary_and_safety_flags(self):
         with tempfile.TemporaryDirectory() as tmp:
             home = Path(tmp) / "home"
