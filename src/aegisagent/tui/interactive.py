@@ -161,6 +161,7 @@ SLASH_COMMANDS: tuple[tuple[str, str], ...] = (
     ("/memory delete", "delete one curated memory entry after approval"),
     ("/memory add", "append a governed note to curated memory after approval"),
     ("/skills", "show skill trust posture"),
+    ("/skills manifest", "preview or write a skill checksum manifest"),
     ("/read", "read a workspace file through a typed non-shell tool"),
     ("/git status", "inspect git status through a typed non-shell tool"),
     ("/git diff", "inspect git diff through a typed non-shell tool"),
@@ -293,6 +294,7 @@ COMMAND_MENU_GROUPS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
             ("/memory delete <entry-id> | approve", "approval-gated curated memory delete"),
             ("/memory add <workspace|user> | <title> | <body> | approve", "approval-gated curated memory write"),
             ("/skills", "show skill trust posture"),
+            ("/skills manifest <skill-name> | approve", "approval-gated skill checksum manifest write"),
             ("/web", "print optional browser GUI launch command"),
             ("/web fetch <url> | approve", "approval-gated terminal URL fetch"),
             ("/browser", "list explicit browser session records"),
@@ -1302,6 +1304,41 @@ def dispatch_interactive_command(command: str, paths: RuntimePaths) -> str:
         indexed = store.index_curated_files()
         print_json({"indexed": indexed, "results": store.search("AegisAgent", limit=5)})
         return "memory"
+    if _slash_invoked(command, "/skills manifest"):
+        raw = _slash_remainder(command, "/skills manifest")
+        parts = [part.strip() for part in raw.split("|", 1)]
+        approved = len(parts) == 2 and parts[1].lower() in {"approve", "approved", "yes"}
+        tokens = parts[0].split()
+        skill_name = tokens[0] if tokens else ""
+        if not skill_name:
+            print("Usage: /skills manifest <skill-name> | approve")
+        else:
+            result = SkillLoader([paths.skills_dir, Path.home() / ".aegisagent" / "skills"]).author_manifest(skill_name, approved=approved)
+            receipt = audit.append(
+                "skills.manifest",
+                {
+                    "status": result["status"],
+                    "skill_name": result["skill_name"],
+                    "path": result["path"],
+                    "approved": result["approved"],
+                    "force": result["force"],
+                    "skill_id": result["skill_id"],
+                    "source_scope": result["source_scope"],
+                    "relative_path": result["relative_path"],
+                    "bundle_sha256": result["bundle_sha256"],
+                    "manifest_sha256": result.get("manifest_sha256", ""),
+                    "previous_manifest_sha256": result.get("previous_manifest_sha256", ""),
+                    "manifest_write_performed": result["manifest_write_performed"],
+                    "workspace_mutation_performed": result["workspace_mutation_performed"],
+                    "host_filesystem_mutation_performed": result["host_filesystem_mutation_performed"],
+                    "external_action_started": result["external_action_started"],
+                    "browser_auto_launch": result["browser_auto_launch"],
+                    "execution_performed": result["execution_performed"],
+                    "raw_secret_values_included": result["raw_secret_values_included"],
+                },
+            )
+            print_json({**result, "receipt": receipt["id"]})
+        return "skills"
     if command.startswith("/skills"):
         loader = SkillLoader([paths.skills_dir, Path.home() / ".aegisagent" / "skills"])
         summary = loader.trust_summary(limit=10)

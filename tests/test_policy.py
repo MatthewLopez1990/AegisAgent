@@ -45,6 +45,18 @@ class PolicyTests(unittest.TestCase):
         self.assertEqual(execute.action, "ask")
         self.assertEqual(execute.risk, "high")
 
+    def test_skill_manifest_preview_allowed_but_apply_is_gated(self):
+        preview = decide_tool("skills", "manifest preview")
+        apply = decide_tool("skills", "manifest apply")
+        approved = decide_tool("skills", "manifest apply", approved=True)
+
+        self.assertEqual(preview.action, "allow")
+        self.assertEqual(preview.risk, "low")
+        self.assertEqual(apply.action, "ask")
+        self.assertEqual(apply.risk, "high")
+        self.assertEqual(approved.action, "allow")
+        self.assertEqual(approved.risk, "medium")
+
 
 if __name__ == "__main__":
     unittest.main()

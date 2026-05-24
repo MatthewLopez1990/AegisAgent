@@ -689,6 +689,38 @@ class TuiRendererTests(unittest.TestCase):
         self.assertIn("skill_verifications", audit_text)
         self.assertIn("checksum_valid", audit_text)
 
+    def test_interactive_dispatch_skills_manifest_preview_apply_flow(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = runtime_paths(tmp)
+            home = Path(tmp) / "home"
+            home.mkdir()
+            skill_root = paths.skills_dir / "safe"
+            skill_root.mkdir(parents=True)
+            manifest_path = skill_root / "aegis-skill-trust.json"
+            (skill_root / "SKILL.md").write_text("---\nname: safe\ndescription: clean\n---\nUse local notes only.\n", encoding="utf-8")
+
+            preview = io.StringIO()
+            with patch("aegisagent.tui.interactive.Path.home", return_value=home), contextlib.redirect_stdout(preview):
+                result = dispatch_interactive_command("/skills manifest safe", paths)
+            self.assertEqual(result, "skills")
+            preview_payload = json.loads(preview.getvalue())
+            self.assertEqual(preview_payload["status"], "needs_approval")
+            self.assertFalse(manifest_path.exists())
+
+            applied = io.StringIO()
+            with patch("aegisagent.tui.interactive.Path.home", return_value=home), contextlib.redirect_stdout(applied):
+                result = dispatch_interactive_command("/skills manifest safe | approve", paths)
+            audit_text = paths.audit_jsonl.read_text(encoding="utf-8")
+            manifest_exists = manifest_path.exists()
+
+        self.assertEqual(result, "skills")
+        applied_payload = json.loads(applied.getvalue())
+        self.assertEqual(applied_payload["status"], "ok")
+        self.assertTrue(applied_payload["manifest_write_performed"])
+        self.assertTrue(manifest_exists)
+        self.assertIn("skills.manifest", audit_text)
+        self.assertIn('"manifest_write_performed": true', audit_text)
+
     def test_interactive_dispatch_web_fetch_requires_approval(self):
         with tempfile.TemporaryDirectory() as tmp:
             output = io.StringIO()

@@ -219,6 +219,81 @@ class SkillLoader:
             "raw_secret_values_included": False,
         }
 
+    def author_manifest(self, skill_name: str, *, approved: bool = False, force: bool = False) -> dict[str, Any]:
+        clean_name = redact_text(skill_name.strip()).text
+        selector = skill_name.strip()
+        if not _valid_skill_selector(selector):
+            return _manifest_author_result("blocked", clean_name, "skill selector must be a skill folder name or source:relative/path", approved=approved)
+        matches = [skill for skill in self.discover() if _skill_matches_selector(skill, selector)]
+        if not matches:
+            return _manifest_author_result("blocked", clean_name, "skill was not found", approved=approved)
+        if len(matches) > 1:
+            return _manifest_author_result("blocked", clean_name, "skill name is ambiguous across configured roots", approved=approved)
+        skill = matches[0]
+        skill_dict = skill.to_dict()
+        manifest_path = skill.path / SKILL_TRUST_MANIFEST
+        display_manifest_path = redact_text(_relative_path(manifest_path, skill.allowed_root)).text
+        if skill.symlink_detected or not skill.inside_allowed_root or not skill.readable:
+            return _manifest_author_result("blocked", clean_name, "skill path is not safe to write a manifest", skill=skill_dict, path=display_manifest_path, approved=approved)
+        if any(finding.get("type") in {"bundle_integrity", "path_escape", "unreadable_skill", "oversized_skill"} for finding in skill.findings):
+            return _manifest_author_result("blocked", clean_name, "skill bundle has integrity findings that must be fixed before manifest authoring", skill=skill_dict, path=display_manifest_path, approved=approved)
+        manifest = _manifest_payload(skill.bundle_sha256)
+        manifest_text = json.dumps(manifest, indent=2, sort_keys=True) + "\n"
+        manifest_sha256 = hashlib.sha256(manifest_text.encode("utf-8")).hexdigest()
+        existing_manifest_sha256 = ""
+        if manifest_path.is_symlink():
+            return _manifest_author_result("blocked", clean_name, "manifest path is a symlink and will not be written", skill=skill_dict, path=display_manifest_path, approved=approved, force=force)
+        if manifest_path.exists():
+            try:
+                existing_bytes = manifest_path.read_bytes()
+                existing = existing_bytes.decode("utf-8", errors="replace")
+                existing_manifest_sha256 = hashlib.sha256(existing_bytes).hexdigest()
+            except OSError:
+                existing = ""
+            if existing == manifest_text:
+                return {
+                    **_manifest_author_result("already_current", clean_name, "manifest already matches the current bundle", skill=skill_dict, path=display_manifest_path, approved=approved, force=force),
+                    "manifest": manifest,
+                    "manifest_sha256": manifest_sha256,
+                    "previous_manifest_sha256": existing_manifest_sha256,
+                    "manifest_write_performed": False,
+                }
+        if manifest_path.exists():
+            return {
+                **_manifest_author_result("blocked", clean_name, "manifest already exists and differs; remove it manually before creating a new checksum manifest", skill=skill_dict, path=display_manifest_path, approved=approved, force=force),
+                "manifest": manifest,
+                "manifest_sha256": manifest_sha256,
+                "previous_manifest_sha256": existing_manifest_sha256,
+                "manifest_write_performed": False,
+            }
+        if not approved:
+            return {
+                **_manifest_author_result("needs_approval", clean_name, "manifest preview only; rerun with --approved to write it", skill=skill_dict, path=display_manifest_path, approved=approved, force=force),
+                "manifest": manifest,
+                "manifest_sha256": manifest_sha256,
+                "manifest_write_performed": False,
+            }
+        try:
+            fd = os.open(manifest_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                handle.write(manifest_text)
+        except OSError as exc:
+            return _manifest_author_result("blocked", clean_name, f"manifest write failed: {exc}", skill=skill_dict, path=display_manifest_path, approved=approved, force=force)
+        refreshed = SkillLoader([skill.allowed_root]).discover()
+        refreshed_skill = next((item for item in refreshed if item.name == skill.name), skill)
+        return {
+            **_manifest_author_result("ok", clean_name, "manifest written", skill=refreshed_skill.to_dict(), path=display_manifest_path, approved=approved, force=force),
+            "manifest": manifest,
+            "manifest_sha256": manifest_sha256,
+            "previous_manifest_sha256": existing_manifest_sha256,
+            "manifest_write_performed": True,
+            "workspace_mutation_performed": True,
+            "host_filesystem_mutation_performed": False,
+            "external_action_started": False,
+            "browser_auto_launch": False,
+            "execution_performed": False,
+        }
+
 
 def _extract_description(body: str) -> str:
     for line in body.splitlines():
@@ -253,6 +328,69 @@ def _skill_findings(body: str, *, extra: tuple[dict[str, Any], ...] = ()) -> tup
                 )
                 seen.add(key)
     return tuple(findings)
+
+
+def _manifest_payload(bundle_sha256: str) -> dict[str, Any]:
+    return {
+        "algorithm": "sha256-bundle-v1",
+        "bundle_sha256": bundle_sha256,
+        "kind": "aegis.skill.trust",
+        "schema_version": 1,
+    }
+
+
+def _manifest_author_result(
+    status: str,
+    skill_name: str,
+    message: str,
+    *,
+    skill: dict[str, Any] | None = None,
+    path: str = "",
+    approved: bool,
+    force: bool = False,
+) -> dict[str, Any]:
+    skill_data = skill or {}
+    trust = skill_data.get("trust", {}) if isinstance(skill_data, dict) else {}
+    return {
+        "status": status,
+        "skill_name": redact_text(skill_name).text,
+        "message": redact_text(message).text,
+        "path": redact_text(path).text,
+        "skill": skill_data,
+        "skill_id": skill_data.get("skill_id", "") if isinstance(skill_data, dict) else "",
+        "source_scope": skill_data.get("source_scope", "") if isinstance(skill_data, dict) else "",
+        "relative_path": skill_data.get("relative_path", "") if isinstance(skill_data, dict) else "",
+        "bundle_sha256": trust.get("bundle_sha256", "") if isinstance(trust, dict) else "",
+        "previous_manifest_sha256": "",
+        "approved": approved,
+        "force": force,
+        "manifest_write_performed": False,
+        "workspace_mutation_performed": False,
+        "host_filesystem_mutation_performed": False,
+        "external_action_started": False,
+        "browser_auto_launch": False,
+        "execution_performed": False,
+        "raw_secret_values_included": False,
+    }
+
+
+def _valid_skill_selector(selector: str) -> bool:
+    if not selector or selector.startswith("/") or "\\" in selector:
+        return False
+    parts = selector.split(":", 1)
+    path_part = parts[1] if len(parts) == 2 else selector
+    if len(parts) == 2 and parts[0] not in {"workspace", "user"}:
+        return False
+    if not path_part or path_part.startswith("/") or path_part in {".", ".."}:
+        return False
+    return all(part not in {"", ".", ".."} for part in path_part.split("/"))
+
+
+def _skill_matches_selector(skill: Skill, selector: str) -> bool:
+    if ":" in selector:
+        scope, relative = selector.split(":", 1)
+        return skill.source_scope == scope and skill.relative_path == relative
+    return skill.name == selector
 
 
 def _trust_score(findings: tuple[dict[str, Any], ...], *, readable: bool, inside_allowed_root: bool, symlink_detected: bool, truncated: bool) -> int:

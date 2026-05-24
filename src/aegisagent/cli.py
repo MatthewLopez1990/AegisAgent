@@ -98,7 +98,10 @@ def build_parser() -> argparse.ArgumentParser:
     tools.add_argument("--approved", action="store_true")
 
     skills = sub.add_parser("skills", help="Discover workspace and user skills with passive trust metadata.")
+    skills.add_argument("skills_command", nargs="?", choices=["manifest"], help="Optional skill operation.")
+    skills.add_argument("skill_name", nargs="?", help="Skill folder name for manifest authoring.")
     skills.add_argument("--limit", type=int, default=0, help="Limit returned skill records. Defaults to all.")
+    skills.add_argument("--approved", action="store_true", help="Write a skill manifest after explicit operator approval.")
     memory = sub.add_parser("memory", help="Index or search memory.")
     memory.add_argument("--index", action="store_true")
     memory.add_argument("--query", default="")
@@ -387,6 +390,35 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "skills":
         loader = SkillLoader([paths.skills_dir, Path.home() / ".aegisagent" / "skills"])
+        if args.skills_command == "manifest":
+            if not args.skill_name:
+                parser.error("skills manifest requires a skill name")
+            result = loader.author_manifest(args.skill_name, approved=args.approved)
+            audit.append(
+                "skills.manifest",
+                {
+                    "status": result["status"],
+                    "skill_name": result["skill_name"],
+                    "path": result["path"],
+                    "approved": result["approved"],
+                    "force": result["force"],
+                    "skill_id": result["skill_id"],
+                    "source_scope": result["source_scope"],
+                    "relative_path": result["relative_path"],
+                    "bundle_sha256": result["bundle_sha256"],
+                    "manifest_sha256": result.get("manifest_sha256", ""),
+                    "previous_manifest_sha256": result.get("previous_manifest_sha256", ""),
+                    "manifest_write_performed": result["manifest_write_performed"],
+                    "workspace_mutation_performed": result["workspace_mutation_performed"],
+                    "host_filesystem_mutation_performed": result["host_filesystem_mutation_performed"],
+                    "external_action_started": result["external_action_started"],
+                    "browser_auto_launch": result["browser_auto_launch"],
+                    "execution_performed": result["execution_performed"],
+                    "raw_secret_values_included": result["raw_secret_values_included"],
+                },
+            )
+            print(json.dumps(result, indent=2))
+            return 0 if result["status"] in {"ok", "needs_approval", "already_current"} else 1
         summary = loader.trust_summary(limit=args.limit or None)
         audit_summary = summary if not args.limit else loader.trust_summary()
         audit.append("skills.discover", skill_audit_payload(audit_summary))

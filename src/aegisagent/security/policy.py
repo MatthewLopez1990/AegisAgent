@@ -96,6 +96,10 @@ def decide_tool(tool: str, action: str, *, approved: bool = False, scope: str = 
     if tool == "skills":
         if action in {"", "discover", "list", "trust_summary"}:
             return PolicyDecision("allow", "low", "passive skill metadata discovery is allowed", receipt, tool, scope)
+        if action in {"manifest", "manifest preview"}:
+            return PolicyDecision("allow", "low", "skill manifest preview is metadata-only", receipt, tool, scope)
+        if action.startswith("manifest") and approved:
+            return PolicyDecision("allow", "medium", "approved skill manifest metadata write", receipt, tool, scope)
         return PolicyDecision("ask", "high", "skill execution or mutation requires explicit approval", receipt, tool, scope)
     if approved or tool in {"browser", "memory"}:
         return PolicyDecision("allow", "low", "tool allowed within scoped policy", receipt, tool, scope)

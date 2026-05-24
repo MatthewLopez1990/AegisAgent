@@ -38,6 +38,7 @@ aegis update --approved
 /memory show <entry-id>
 /memory delete <entry-id> | approve
 /skills
+/skills manifest <skill-name> | approve
 /sessions search <query>
 /tasks submit <request>
 /tasks bg <request>
@@ -106,13 +107,18 @@ Skill handling is passive discovery only. Aegis reads `SKILL.md` files under the
 ```bash
 aegis skills
 aegis skills --limit 10
+aegis skills manifest <skill-name>
+aegis skills manifest <skill-name> --approved
 ```
 
 ```text
 /skills
+/skills manifest <skill-name> | approve
 ```
 
 The output includes `trusted`, `review`, and `quarantined` counts plus each visible skill's redacted `name`, `description`, `findings`, `skill_id`, content hashes, manifest status, signature status, and passive safety flags. Quarantine is marker-, path-safety-, and manifest-integrity-based. Missing manifests are acceptable; invalid or mismatched manifests quarantine the skill. Signatures are surfaced as declared/unverified until trusted-key signature verification lands. Policy-integrated skill execution approvals remain future work.
+
+`aegis skills manifest <skill-name>` previews deterministic checksum-only manifest JSON. Add `--approved` to write `aegis-skill-trust.json`; this does not sign or execute skills.
 
 ## Governed Workspace Tools
 

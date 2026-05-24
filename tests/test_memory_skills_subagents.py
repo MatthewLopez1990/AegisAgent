@@ -283,6 +283,58 @@ class MemorySkillsSubagentTests(unittest.TestCase):
             self.assertTrue(first["trust"]["truncated"])
             self.assertNotEqual(first["trust"]["skill_file_sha256"], second["trust"]["skill_file_sha256"])
 
+    def test_skill_loader_authors_manifest_preview_and_approved_write(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "skills"
+            skill_root = root / "safe"
+            skill_root.mkdir(parents=True)
+            (skill_root / "SKILL.md").write_text("---\nname: safe\ndescription: clean\n---\nUse local notes only.\n", encoding="utf-8")
+            loader = SkillLoader([root])
+
+            preview = loader.author_manifest("safe")
+            self.assertEqual(preview["status"], "needs_approval")
+            self.assertFalse(preview["manifest_write_performed"])
+            self.assertFalse((skill_root / "aegis-skill-trust.json").exists())
+
+            written = loader.author_manifest("safe", approved=True)
+            self.assertEqual(written["status"], "ok")
+            self.assertTrue(written["manifest_write_performed"])
+            self.assertTrue((skill_root / "aegis-skill-trust.json").exists())
+            self.assertEqual(SkillLoader([root]).trust_summary()["skills"][0]["manifest_status"], "checksum_valid")
+
+    def test_skill_loader_manifest_author_blocks_existing_manifest_without_force(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "skills"
+            skill_root = root / "safe"
+            skill_root.mkdir(parents=True)
+            (skill_root / "SKILL.md").write_text("---\nname: safe\ndescription: clean\n---\nUse local notes only.\n", encoding="utf-8")
+            loader = SkillLoader([root])
+            self.assertEqual(loader.author_manifest("safe", approved=True)["status"], "ok")
+            existing = (skill_root / "aegis-skill-trust.json").read_text(encoding="utf-8")
+
+            blocked = loader.author_manifest("safe", approved=True)
+            forced = loader.author_manifest("safe", approved=True, force=True)
+
+            self.assertEqual(blocked["status"], "already_current")
+            self.assertEqual((skill_root / "aegis-skill-trust.json").read_text(encoding="utf-8"), existing)
+            self.assertEqual(forced["status"], "already_current")
+
+    def test_skill_loader_manifest_author_blocks_different_existing_manifest_even_with_force(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "skills"
+            skill_root = root / "safe"
+            skill_root.mkdir(parents=True)
+            manifest_path = skill_root / "aegis-skill-trust.json"
+            (skill_root / "SKILL.md").write_text("---\nname: safe\ndescription: clean\n---\nUse local notes only.\n", encoding="utf-8")
+            sentinel = '{"schema_version": 1, "kind": "aegis.skill.trust", "algorithm": "sha256-bundle-v1", "bundle_sha256": "' + ("0" * 64) + '"}\n'
+            manifest_path.write_text(sentinel, encoding="utf-8")
+
+            result = SkillLoader([root]).author_manifest("safe", approved=True, force=True)
+
+            self.assertEqual(result["status"], "blocked")
+            self.assertIn("differs", result["message"])
+            self.assertEqual(manifest_path.read_text(encoding="utf-8"), sentinel)
+
     def test_subagent_limits_depth_and_children(self):
         queue = SubagentQueue(SubagentLimits(max_concurrency=8, max_depth=1, max_children=1))
         parent = queue.spawn("root")

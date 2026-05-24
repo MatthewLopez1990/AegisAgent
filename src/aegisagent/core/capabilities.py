@@ -110,7 +110,7 @@ CAPABILITIES: tuple[Capability, ...] = (
         "Local memory files, redacted memory list/show/search, approval-gated curated memory writes/deletes, redacted session search, passive SKILL.md trust metadata, and optional checksum-manifest verification are available.",
         "primary",
         "Add trusted-key signature verification and policy-integrated skill execution approvals.",
-        ("aegis memory list", "aegis skills", "/skills", "aegis memory delete <entry-id> --approved"),
+        ("aegis memory list", "aegis skills", "aegis skills manifest <skill-name> --approved", "/skills"),
     ),
     Capability(
         "model_provider_routing",
@@ -197,7 +197,7 @@ def capability_map(paths: RuntimePaths) -> dict[str, Any]:
         "policy_audit_security": (f"{command} tools", f"{command} audit verify", "/policy shell rg --files"),
         "task_queue": (f"{command} tasks --submit <request>", f"{command} tasks --background <request>", "/tasks watch <id>"),
         "agents_subagents": (f"{command} agents", f"{command} agents contracts", f"{command} agents delegate <task>", "/agents bg <task>"),
-        "memory_sessions_skills": (f"{command} memory list", f"{command} skills", "/skills", f"{command} memory delete <entry-id> --approved"),
+        "memory_sessions_skills": (f"{command} memory list", f"{command} skills", f"{command} skills manifest <skill-name> --approved", "/skills"),
         "model_provider_routing": (f"{command} chat <prompt>", f"{command} model usage", "/model usage"),
         "connectors_messaging_mcp_browser": (f"{command} connectors", f"{command} browser sessions", "/browser open <url> | approve"),
         "gateway_web": (f"{command} web", f"{command} gateway", "/web"),

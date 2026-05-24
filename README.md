@@ -156,6 +156,7 @@ PYTHONPATH=src python3 -m aegisagent install shim --approved --bin-dir "$HOME/.l
 | `aegis memory list` | List curated memory entries. |
 | `aegis memory show <entry-id>` | Inspect one redacted curated memory entry. |
 | `aegis skills` | Show passive SKILL.md trust metadata, optional checksum-manifest status, and quarantine findings. |
+| `aegis skills manifest <skill-name> --approved` | Write a checksum-only `aegis-skill-trust.json` sidecar for one discovered skill. |
 | `aegis activation` | Show terminal startup and browser-off safety details. |
 | `aegis update --approved` | Pull the latest GitHub `main` into the installed checkout. |
 | `aegis completion zsh` | Print shell completion. Also supports `bash` and `fish`. |
@@ -196,6 +197,7 @@ aegis completion fish > ~/.config/fish/completions/aegis.fish
 /memory show <entry-id>
 /memory delete <entry-id> | approve
 /skills
+/skills manifest <skill-name> | approve
 /git status
 /git diff [path]
 /test

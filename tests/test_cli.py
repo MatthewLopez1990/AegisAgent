@@ -159,6 +159,36 @@ class CliTests(unittest.TestCase):
         self.assertNotIn(raw_signature, audit_text)
         self.assertIn('"status": "declared_unverified"', audit_text)
 
+    def test_skills_manifest_cli_is_approval_gated_and_audited(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp) / "home"
+            home.mkdir()
+            skill_root = Path(tmp) / "skills" / "safe"
+            skill_root.mkdir(parents=True)
+            manifest_path = skill_root / "aegis-skill-trust.json"
+            (skill_root / "SKILL.md").write_text("---\nname: safe\ndescription: clean\n---\nUse local notes only.\n", encoding="utf-8")
+
+            preview = run_cli("skills", "manifest", "safe", cwd=tmp, extra_env={"HOME": str(home)})
+            written = run_cli("skills", "manifest", "safe", "--approved", cwd=tmp, extra_env={"HOME": str(home)})
+            blocked = run_cli("skills", "manifest", "safe", "--approved", cwd=tmp, extra_env={"HOME": str(home)})
+            audit_text = (Path(tmp) / ".aegisagent" / "audit.jsonl").read_text(encoding="utf-8")
+            manifest_exists = manifest_path.exists()
+
+        self.assertEqual(preview.returncode, 0, preview.stderr)
+        preview_payload = json.loads(preview.stdout)
+        self.assertEqual(preview_payload["status"], "needs_approval")
+        self.assertFalse(preview_payload["manifest_write_performed"])
+        self.assertEqual(written.returncode, 0, written.stderr)
+        written_payload = json.loads(written.stdout)
+        self.assertEqual(written_payload["status"], "ok")
+        self.assertTrue(written_payload["manifest_write_performed"])
+        self.assertTrue(manifest_exists)
+        self.assertNotIn("description", audit_text)
+        self.assertIn("skills.manifest", audit_text)
+        self.assertIn('"manifest_write_performed": true', audit_text)
+        self.assertEqual(blocked.returncode, 0)
+        self.assertEqual(json.loads(blocked.stdout)["status"], "already_current")
+
     def test_no_args_explains_terminal_activation_without_web(self):
         with tempfile.TemporaryDirectory() as tmp:
             result = run_cli(cwd=tmp)
