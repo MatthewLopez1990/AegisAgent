@@ -1,18 +1,61 @@
 # AegisAgent
 
-AegisAgent is a terminal-first agent console. Install it, run `aegis`, and work
-from the terminal UI.
+AegisAgent is a terminal-first agent console. Install it, run `aegis`, then type
+normal requests or slash commands in the terminal UI.
 
 It is being built toward a secure Hermes-style workflow: prompt-first chat,
 slash commands, typed local tools, memory, task queues, subagents, automations,
 audit receipts, and explicit approval gates.
 
 AegisAgent does not open a browser during install, setup, update, launch, health
-checks, or normal terminal use. Setup does not launch a browser. The web console
-is optional and must be started separately.
+checks, or normal terminal use. The web console is optional and must be started
+separately.
 
 This project is `AegisAgent`. Older `Aegis-Agent` references are historical
 design inputs, not the install target.
+
+## Quick Start
+
+Install on macOS or Linux:
+
+```bash
+/bin/sh -c "$(curl -fsSL https://raw.githubusercontent.com/MatthewLopez1990/AegisAgent/main/scripts/install.sh)"
+```
+
+Make sure your shell can find the command:
+
+```bash
+export PATH="$HOME/.local/bin:$PATH"
+command -v aegis
+```
+
+Start the agent:
+
+```bash
+aegis
+```
+
+Update this installed checkout from GitHub later:
+
+```bash
+aegis update --approved
+```
+
+Inside the terminal UI, type a normal request:
+
+```text
+review this workspace
+summarize README.md
+run tests
+```
+
+Or type a slash command for a direct action:
+
+```text
+/setup next
+/agents delegate review this workspace
+/tasks submit draft a safe implementation plan
+```
 
 ## Install On macOS Or Linux
 
@@ -21,10 +64,6 @@ Check prerequisites:
 ```bash
 python3 --version
 git --version
-```
-
-```bash
-/bin/sh -c "$(curl -fsSL https://raw.githubusercontent.com/MatthewLopez1990/AegisAgent/main/scripts/install.sh)"
 ```
 
 This works on macOS and Linux. You need `git`, `curl`, and `python3` 3.12 or
@@ -68,7 +107,7 @@ aegis setup model
 aegis setup --run-checks
 ```
 
-Then start the terminal UI:
+Then start the terminal UI with either command:
 
 ```bash
 aegis
@@ -161,6 +200,9 @@ aegis agents
 aegis agents contracts
 aegis agents delegate "review this workspace"
 aegis agents bg "compare implementation options"
+aegis agents artifacts
+aegis agents artifacts show <artifact-id>
+aegis agents artifacts search "Checkpoint plan"
 aegis model usage
 ```
 
@@ -170,6 +212,11 @@ usage metadata, durable role artifacts, input-artifact handoff metadata, and
 audit receipts, and falls back locally if an attempted external route fails.
 Later-stage workers receive prior worker artifact summaries while preserving the
 same bounded role contracts and approval model.
+
+Artifact browsing is read-only. `aegis agents artifacts` lists durable role
+artifacts from prior delegations, `show` reads redacted artifact content, and
+`search` matches ids, roles, titles, summaries, and redacted artifact text. It
+does not reuse artifacts across separate delegations yet.
 
 ## Common Commands
 
@@ -184,6 +231,7 @@ aegis tasks --submit "do work"
 aegis tasks --events <id>
 aegis memory search <query>
 aegis connectors outbox
+aegis agents artifacts
 aegis audit verify
 aegis update --approved
 ```
@@ -306,14 +354,14 @@ OpenAI-compatible model routing for chat and role workers, scoped model usage
 ledger rows, connector metadata with a redacted approval-bound outbox, memory
 review controls, passive skill trust metadata, and local agent/subagent
 orchestration with provider fallback metadata, durable role artifacts, and
-artifact handoff metadata.
+artifact list/show/search plus handoff metadata.
 
 Partial: web console parity, live connectors, self-improvement, richer browser
-automation, artifact list/show/search, cross-delegation artifact reuse,
-multi-provider fallback ordering, subscription bridge readiness, richer
-role-specific tool budgets, and higher-depth delegation controls.
+automation, cross-delegation artifact reuse, multi-provider fallback ordering,
+subscription bridge readiness, richer role-specific tool budgets, and
+higher-depth delegation controls.
 
-Next: artifact browsing and reuse across delegations, richer role-specific tool
-budgets, higher-depth delegation controls, final synthesis over artifact graphs,
-live browser control behind explicit approval, broader integrations, signed
+Next: approval-gated artifact reuse across delegations, richer role-specific
+tool budgets, higher-depth delegation controls, final synthesis over artifact
+graphs, live browser control behind explicit approval, broader integrations, signed
 skill trust, and packaged release flows.

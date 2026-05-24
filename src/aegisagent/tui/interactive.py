@@ -47,6 +47,9 @@ from aegisagent.core.subagents import (
     format_agent_contracts,
     format_agent_profiles,
     format_agent_status,
+    format_artifact,
+    format_artifact_search,
+    format_artifacts,
     format_background_job,
     format_background_jobs,
     format_delegation,
@@ -201,6 +204,9 @@ SLASH_COMMANDS: tuple[tuple[str, str], ...] = (
     ("/test", "run default allowlisted tests through a typed non-shell tool"),
     ("/verify", "run an allowlisted verification command through a typed tool"),
     ("/subagents", "show bounded subagent limits"),
+    ("/subagents artifacts", "list durable role artifacts"),
+    ("/subagents artifacts show", "show one durable role artifact"),
+    ("/subagents artifacts search", "search durable role artifacts"),
     ("/subagents live", "delegate and stream local worker progress"),
     ("/subagents bg", "start background subagent work and keep composer usable"),
     ("/subagents monitor", "live repaint background subagent job progress"),
@@ -210,6 +216,9 @@ SLASH_COMMANDS: tuple[tuple[str, str], ...] = (
     ("/agents profiles", "show planner/researcher/implementer/reviewer profiles"),
     ("/agents contracts", "show role context contracts, deliverables, and budgets"),
     ("/agents delegate", "run bounded local planner/researcher/implementer/reviewer agents"),
+    ("/agents artifacts", "list durable role artifacts"),
+    ("/agents artifacts show", "show one durable role artifact"),
+    ("/agents artifacts search", "search durable role artifacts"),
     ("/agents live", "delegate and stream Hermes-style local agent progress"),
     ("/agents stream", "alias for /agents live"),
     ("/agents bg", "start background agent work and keep composer usable"),
@@ -391,6 +400,9 @@ COMMAND_MENU_GROUPS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
             ("/browser screenshot <session-id> | <path> | approve", "attach screenshot evidence"),
             ("/test [command]", "run allowlisted tests without shell parsing"),
             ("/verify [command]", "run allowlisted verification without shell parsing"),
+            ("/subagents artifacts", "list durable role artifacts"),
+            ("/subagents artifacts show <artifact-id>", "show one durable role artifact"),
+            ("/subagents artifacts search <query>", "search durable role artifacts"),
             ("/subagents live <task>", "delegate and stream bounded workers"),
             ("/subagents bg <task>", "start background subagent work"),
             ("/subagents monitor <job-id>", "live repaint background subagent progress"),
@@ -399,6 +411,9 @@ COMMAND_MENU_GROUPS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
             ("/agents", "show Hermes-style agent status"),
             ("/agents contracts", "show role context contracts and budgets"),
             ("/agents delegate <task>", "delegate to named local agent profiles"),
+            ("/agents artifacts", "list durable role artifacts"),
+            ("/agents artifacts show <artifact-id>", "show one durable role artifact"),
+            ("/agents artifacts search <query>", "search durable role artifacts"),
             ("/agents bg <task>", "start background agent work"),
             ("/agents monitor <job-id>", "live repaint background agent progress"),
             ("/dashboard", "show terminal operator posture"),
@@ -431,6 +446,9 @@ COMMAND_MENU_GROUPS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
             ("/tasks unwatch", "stop active task monitor"),
             ("/tasks recover", "mark dead detached workers failed"),
             ("/subagents", "show or run bounded local subagents"),
+            ("/subagents artifacts", "list durable role artifacts"),
+            ("/subagents artifacts show <artifact-id>", "show one durable role artifact"),
+            ("/subagents artifacts search <query>", "search durable role artifacts"),
             ("/subagents jobs", "list background jobs"),
             ("/subagents monitor <job-id>", "live subagent job monitor in the TUI"),
             ("/subagents unwatch", "stop active subagent job monitor"),
@@ -948,7 +966,7 @@ class _CursesAegisAgent:
             self.message = "No slash command matches."
             return
         command = palette[min(self.palette_index, len(palette) - 1)][0]
-        self.input_buffer = command + (" " if command in {"/policy shell", "/read", "/git diff", "/git stage", "/git commit", "/git branch", "/git remote", "/edit replace", "/test", "/verify", "/sessions search", "/submit", "/add-dir", "/memory add", "/memory search", "/memory show", "/memory delete", "/connectors draft", "/connectors send", "/web fetch", "/browser open", "/browser screenshot", "/tasks submit", "/tasks bg", "/tasks run", "/tasks start", "/tasks events", "/tasks output", "/tasks logs", "/tasks watch", "/tasks cancel", "/automations create", "/automations trigger", "/automations pause", "/automations resume", "/automations delete", "/improve propose", "/improve approve", "/improve implement", "/improve handoff", "/improve candidate", "/improve diff", "/improve verify", "/improve apply", "/improve evidence", "/improve complete", "/improve reject", "/subagents bg", "/subagents live", "/subagents monitor", "/subagents cancel", "/agents delegate", "/agents bg", "/agents live", "/agents monitor", "/agents cancel", "/q"} else "")
+        self.input_buffer = command + (" " if command in {"/policy shell", "/read", "/git diff", "/git stage", "/git commit", "/git branch", "/git remote", "/edit replace", "/test", "/verify", "/sessions search", "/submit", "/add-dir", "/memory add", "/memory search", "/memory show", "/memory delete", "/connectors draft", "/connectors send", "/web fetch", "/browser open", "/browser screenshot", "/tasks submit", "/tasks bg", "/tasks run", "/tasks start", "/tasks events", "/tasks output", "/tasks logs", "/tasks watch", "/tasks cancel", "/automations create", "/automations trigger", "/automations pause", "/automations resume", "/automations delete", "/improve propose", "/improve approve", "/improve implement", "/improve handoff", "/improve candidate", "/improve diff", "/improve verify", "/improve apply", "/improve evidence", "/improve complete", "/improve reject", "/subagents bg", "/subagents live", "/subagents monitor", "/subagents cancel", "/subagents artifacts show", "/subagents artifacts search", "/agents delegate", "/agents bg", "/agents live", "/agents monitor", "/agents cancel", "/agents artifacts show", "/agents artifacts search", "/q"} else "")
         self.cursor = len(self.input_buffer)
         self.message = f"Completed {command}; add args or press Enter."
 
@@ -1711,7 +1729,26 @@ def dispatch_interactive_command(command: str, paths: RuntimePaths) -> str:
     if command.startswith("/subagents"):
         task = command.removeprefix("/subagents").strip()
         orchestrator = LocalSubagentOrchestrator(paths)
-        if task.startswith("bg ") or task.startswith("background "):
+        if task in {"artifacts", "artifact list"}:
+            store = SubagentStore(paths)
+            rows = store.artifacts()
+            audit.append("subagent.artifacts.listed", {"surface": "tui", "count": len(rows), "limit": 50, "browser_auto_launch": False, "external_action_started": False, "raw_secret_values_included": False})
+            print(format_artifacts(rows))
+        elif task.startswith("artifacts show ") or task.startswith("artifact "):
+            artifact_id = task.removeprefix("artifacts show ").removeprefix("artifact ").strip()
+            try:
+                row = SubagentStore(paths).artifact(artifact_id)
+            except KeyError as exc:
+                print(f"Artifact not found: {exc}")
+            else:
+                audit.append("subagent.artifact.read", {"surface": "tui", "artifact_id": artifact_id, "path": row.get("path", ""), "browser_auto_launch": False, "external_action_started": False, "raw_secret_values_included": False})
+                print(format_artifact(row))
+        elif task.startswith("artifacts search ") or task.startswith("search-artifacts ") or task.startswith("artifact search "):
+            query = task.removeprefix("artifacts search ").removeprefix("search-artifacts ").removeprefix("artifact search ").strip()
+            rows = SubagentStore(paths).search_artifacts(query)
+            audit.append("subagent.artifacts.searched", {"surface": "tui", "query": query, "count": len(rows), "limit": 20, "browser_auto_launch": False, "external_action_started": False, "raw_secret_values_included": False})
+            print(format_artifact_search(query, rows))
+        elif task.startswith("bg ") or task.startswith("background "):
             job_task = task.split(maxsplit=1)[1] if " " in task else ""
             record = orchestrator.start_background(job_task)
             print(format_background_job(record))
@@ -1748,7 +1785,7 @@ def dispatch_interactive_command(command: str, paths: RuntimePaths) -> str:
         elif task in {"", "list"}:
             print(format_subagent_records(SubagentStore(paths).list()))
             print("")
-            print("usage: /subagents <task> | /subagents live <task> | /subagents bg <task> | /subagents jobs | /subagents job <job-id> | /subagents monitor <job-id> | /subagents unwatch | /subagents cancel <job-id>")
+            print("usage: /subagents <task> | /subagents artifacts | /subagents artifacts show <artifact-id> | /subagents artifacts search <query> | /subagents live <task> | /subagents bg <task> | /subagents jobs | /subagents job <job-id> | /subagents monitor <job-id> | /subagents unwatch | /subagents cancel <job-id>")
         else:
             result = orchestrator.delegate(task)
             print(format_delegation(result))
@@ -1765,6 +1802,24 @@ def dispatch_interactive_command(command: str, paths: RuntimePaths) -> str:
         elif task.startswith("delegate "):
             result = orchestrator.delegate(task.removeprefix("delegate ").strip())
             print(format_delegation(result).replace("SUBAGENT DELEGATION", "AGENT DELEGATION", 1))
+        elif task in {"artifacts", "artifact list"}:
+            rows = SubagentStore(paths).artifacts()
+            audit.append("subagent.artifacts.listed", {"surface": "agents_tui", "count": len(rows), "limit": 50, "browser_auto_launch": False, "external_action_started": False, "raw_secret_values_included": False})
+            print(format_artifacts(rows).replace("SUBAGENT ARTIFACTS", "AGENT ARTIFACTS", 1))
+        elif task.startswith("artifacts show ") or task.startswith("artifact "):
+            artifact_id = task.removeprefix("artifacts show ").removeprefix("artifact ").strip()
+            try:
+                row = SubagentStore(paths).artifact(artifact_id)
+            except KeyError as exc:
+                print(f"Artifact not found: {exc}")
+            else:
+                audit.append("subagent.artifact.read", {"surface": "agents_tui", "artifact_id": artifact_id, "path": row.get("path", ""), "browser_auto_launch": False, "external_action_started": False, "raw_secret_values_included": False})
+                print(format_artifact(row).replace("SUBAGENT ARTIFACT", "AGENT ARTIFACT", 1))
+        elif task.startswith("artifacts search ") or task.startswith("search-artifacts ") or task.startswith("artifact search "):
+            query = task.removeprefix("artifacts search ").removeprefix("search-artifacts ").removeprefix("artifact search ").strip()
+            rows = SubagentStore(paths).search_artifacts(query)
+            audit.append("subagent.artifacts.searched", {"surface": "agents_tui", "query": query, "count": len(rows), "limit": 20, "browser_auto_launch": False, "external_action_started": False, "raw_secret_values_included": False})
+            print(format_artifact_search(query, rows).replace("SUBAGENT ARTIFACT SEARCH", "AGENT ARTIFACT SEARCH", 1))
         elif task.startswith("bg ") or task.startswith("background "):
             job_task = task.split(maxsplit=1)[1] if " " in task else ""
             record = orchestrator.start_background(job_task)

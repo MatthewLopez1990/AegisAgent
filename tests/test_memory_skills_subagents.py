@@ -18,6 +18,9 @@ from aegisagent.core.subagents import (
     format_background_job,
     format_background_jobs,
     format_delegation,
+    format_artifact,
+    format_artifact_search,
+    format_artifacts,
     format_events,
     format_stop,
     format_subagent_records,
@@ -381,6 +384,17 @@ class MemorySkillsSubagentTests(unittest.TestCase):
             self.assertEqual(receipt["payload"]["worker_contracts"][0]["role"], "planner")
             self.assertIn("Checkpoint plan", receipt["payload"]["worker_contracts"][0]["deliverable"])
             self.assertEqual(len(result.artifacts), 4)
+            artifact_rows = SubagentStore(paths).artifacts()
+            self.assertEqual(len(artifact_rows), 4)
+            planner_artifact = next(row for row in artifact_rows if row["role"] == "planner")
+            shown_artifact = SubagentStore(paths).artifact(planner_artifact["id"])
+            self.assertIn("# Planner Artifact", shown_artifact["content"])
+            self.assertIn("Checkpoint plan", shown_artifact["content"])
+            search_rows = SubagentStore(paths).search_artifacts("Checkpoint plan")
+            self.assertTrue(any(row["id"] == planner_artifact["id"] for row in search_rows))
+            self.assertIn("SUBAGENT ARTIFACTS", format_artifacts(artifact_rows))
+            self.assertIn("SUBAGENT ARTIFACT", format_artifact(shown_artifact))
+            self.assertIn("SUBAGENT ARTIFACT SEARCH", format_artifact_search("Checkpoint plan", search_rows))
             for worker in result.workers:
                 self.assertEqual(len(worker.artifacts), 1)
                 artifact = worker.artifacts[0]

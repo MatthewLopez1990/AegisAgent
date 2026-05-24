@@ -14,7 +14,7 @@ from aegisagent.config import runtime_paths
 from aegisagent.core.memory import MemoryStore
 from aegisagent.core.setup_state import setup_wizard_preferences
 from aegisagent.core.skills import SkillLoader
-from aegisagent.core.subagents import BackgroundJobStore
+from aegisagent.core.subagents import BackgroundJobStore, SubagentStore
 from aegisagent.core.tasks import TaskRunner, TaskStore
 from aegisagent.tui.interactive import SLASH_COMMANDS, _CursesAegisAgent, build_interactive_panels, dispatch_interactive_command, normalize_interactive_command, slash_palette_candidates
 from aegisagent.tui.renderer import TuiState, render
@@ -366,6 +366,10 @@ class TuiRendererTests(unittest.TestCase):
         self.assertTrue(any(command == "/connectors outbox" for command, _detail in connector_outbox_matches))
         subagent_monitor_matches = slash_palette_candidates("/subagents mon")
         self.assertTrue(any(command == "/subagents monitor" for command, _detail in subagent_monitor_matches))
+        subagent_artifact_matches = slash_palette_candidates("/subagents artifacts", limit=20)
+        self.assertTrue(any(command == "/subagents artifacts" for command, _detail in subagent_artifact_matches))
+        self.assertTrue(any(command == "/subagents artifacts show" for command, _detail in subagent_artifact_matches))
+        self.assertTrue(any(command == "/subagents artifacts search" for command, _detail in subagent_artifact_matches))
         subagent_unwatch_matches = slash_palette_candidates("/subagents un")
         self.assertTrue(any(command == "/subagents unwatch" for command, _detail in subagent_unwatch_matches))
         agent_matches = slash_palette_candidates("/ag")
@@ -374,6 +378,10 @@ class TuiRendererTests(unittest.TestCase):
         self.assertTrue(any(command == "/agents delegate" for command, _detail in agent_delegate_matches))
         agent_contract_matches = slash_palette_candidates("/agents con")
         self.assertTrue(any(command == "/agents contracts" for command, _detail in agent_contract_matches))
+        agent_artifact_matches = slash_palette_candidates("/agents artifacts", limit=20)
+        self.assertTrue(any(command == "/agents artifacts" for command, _detail in agent_artifact_matches))
+        self.assertTrue(any(command == "/agents artifacts show" for command, _detail in agent_artifact_matches))
+        self.assertTrue(any(command == "/agents artifacts search" for command, _detail in agent_artifact_matches))
         agent_monitor_matches = slash_palette_candidates("/agents mon")
         self.assertTrue(any(command == "/agents monitor" for command, _detail in agent_monitor_matches))
 
@@ -1391,8 +1399,30 @@ class TuiRendererTests(unittest.TestCase):
             self.assertIn("SUBAGENT DELEGATION", output.getvalue())
             self.assertIn("planner", output.getvalue())
             self.assertNotIn('{"root"', output.getvalue())
+            planner_artifact = next(row["id"] for row in SubagentStore(paths).artifacts() if row["role"] == "planner")
+            artifacts = io.StringIO()
+            with contextlib.redirect_stdout(artifacts):
+                result = dispatch_interactive_command("/subagents artifacts", paths)
+            self.assertEqual(result, "subagents")
+            self.assertIn("SUBAGENT ARTIFACTS", artifacts.getvalue())
+            self.assertIn(planner_artifact, artifacts.getvalue())
+            artifact = io.StringIO()
+            with contextlib.redirect_stdout(artifact):
+                result = dispatch_interactive_command(f"/subagents artifacts show {planner_artifact}", paths)
+            self.assertEqual(result, "subagents")
+            self.assertIn("SUBAGENT ARTIFACT", artifact.getvalue())
+            self.assertIn("# Planner Artifact", artifact.getvalue())
+            artifact_search = io.StringIO()
+            with contextlib.redirect_stdout(artifact_search):
+                result = dispatch_interactive_command("/subagents artifacts search Checkpoint plan", paths)
+            self.assertEqual(result, "subagents")
+            self.assertIn("SUBAGENT ARTIFACT SEARCH", artifact_search.getvalue())
+            self.assertIn(planner_artifact, artifact_search.getvalue())
             audit = (paths.state_dir / "audit.jsonl").read_text(encoding="utf-8")
             self.assertIn("subagent.delegation.completed", audit)
+            self.assertIn("subagent.artifacts.listed", audit)
+            self.assertIn("subagent.artifact.read", audit)
+            self.assertIn("subagent.artifacts.searched", audit)
 
     def test_interactive_dispatch_agents_surface(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1430,6 +1460,31 @@ class TuiRendererTests(unittest.TestCase):
             self.assertEqual(result, "agents")
             self.assertIn("AGENT DELEGATION", delegated.getvalue())
             self.assertIn("planner", delegated.getvalue())
+            planner_artifact = next(row["id"] for row in SubagentStore(paths).artifacts() if row["role"] == "planner")
+
+            artifacts = io.StringIO()
+            with contextlib.redirect_stdout(artifacts):
+                result = dispatch_interactive_command("/agents artifacts", paths)
+
+            self.assertEqual(result, "agents")
+            self.assertIn("AGENT ARTIFACTS", artifacts.getvalue())
+            self.assertIn(planner_artifact, artifacts.getvalue())
+
+            artifact = io.StringIO()
+            with contextlib.redirect_stdout(artifact):
+                result = dispatch_interactive_command(f"/agents artifacts show {planner_artifact}", paths)
+
+            self.assertEqual(result, "agents")
+            self.assertIn("AGENT ARTIFACT", artifact.getvalue())
+            self.assertIn("# Planner Artifact", artifact.getvalue())
+
+            artifact_search = io.StringIO()
+            with contextlib.redirect_stdout(artifact_search):
+                result = dispatch_interactive_command("/agents artifacts search Checkpoint plan", paths)
+
+            self.assertEqual(result, "agents")
+            self.assertIn("AGENT ARTIFACT SEARCH", artifact_search.getvalue())
+            self.assertIn(planner_artifact, artifact_search.getvalue())
 
             background = io.StringIO()
             with patch.dict("os.environ", {"AEGISAGENT_BACKGROUND_NO_SPAWN": "1"}), contextlib.redirect_stdout(background):

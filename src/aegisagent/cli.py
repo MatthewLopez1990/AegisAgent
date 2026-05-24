@@ -43,6 +43,9 @@ from aegisagent.core.subagents import (
     format_agent_contracts,
     format_agent_profiles,
     format_agent_status,
+    format_artifact,
+    format_artifact_search,
+    format_artifacts,
     format_background_job,
     format_background_jobs,
     format_event_line,
@@ -260,11 +263,14 @@ def build_parser() -> argparse.ArgumentParser:
     subagents.add_argument("--run-job", metavar="JOB_ID", help=argparse.SUPPRESS)
     subagents.add_argument("--stop", metavar="SUBAGENT_ID", help="Cascade stop a persisted subagent tree.")
     subagents.add_argument("--events", metavar="ROOT_ID", help="Show persisted subagent timeline events for a root id.")
+    subagents.add_argument("--artifacts", action="store_true", help="List durable subagent role artifacts.")
+    subagents.add_argument("--artifact", metavar="ARTIFACT_ID", help="Show one durable subagent role artifact.")
+    subagents.add_argument("--artifact-search", metavar="QUERY", help="Search durable subagent role artifacts.")
 
     agents = sub.add_parser("agents", help="Hermes-style agent surface backed by governed local subagents.")
-    agents.add_argument("agent_command", nargs="?", default="status", choices=["status", "profiles", "contracts", "delegate", "stream", "background", "bg", "jobs", "job", "monitor", "cancel", "recover"], help="Agent command to run.")
+    agents.add_argument("agent_command", nargs="?", default="status", choices=["status", "profiles", "contracts", "delegate", "stream", "background", "bg", "jobs", "job", "monitor", "cancel", "recover", "artifacts", "artifact", "search-artifacts"], help="Agent command to run.")
     agents.add_argument("agent_args", nargs="*", help="Task text, job id, or root id for the selected agent command.")
-    agents.add_argument("--json", action="store_true", help="Emit JSON for status and profiles.")
+    agents.add_argument("--json", action="store_true", default=argparse.SUPPRESS, help="Emit JSON for status, profiles, and artifact browsing.")
 
     tui = sub.add_parser("tui", help="Launch governed terminal TUI. This is the primary activation path.")
     tui.add_argument("--view", choices=["command", "setup", "tools", "activation", "help"], default="command")
@@ -1114,6 +1120,27 @@ def main(argv: list[str] | None = None) -> int:
         elif args.events:
             events = orchestrator.events(args.events)
             print(json.dumps({"root_id": args.events, "events": [event.to_dict() for event in events]}, indent=2))
+        elif args.artifacts:
+            store = SubagentStore(paths)
+            rows = store.artifacts()
+            receipt = audit.append("subagent.artifacts.listed", {"count": len(rows), "limit": 50, "browser_auto_launch": False, "external_action_started": False, "raw_secret_values_included": False})
+            payload = {"artifacts": rows, "receipt": receipt["id"], "browser_auto_launch": False, "external_action_started": False}
+            print(json.dumps(payload, indent=2) if args.json else format_artifacts(rows))
+        elif args.artifact:
+            store = SubagentStore(paths)
+            try:
+                row = store.artifact(args.artifact)
+            except KeyError as exc:
+                parser.error(str(exc))
+            receipt = audit.append("subagent.artifact.read", {"artifact_id": args.artifact, "path": row.get("path", ""), "browser_auto_launch": False, "external_action_started": False, "raw_secret_values_included": False})
+            payload = {"artifact": row, "receipt": receipt["id"], "browser_auto_launch": False, "external_action_started": False}
+            print(json.dumps(payload, indent=2) if args.json else format_artifact(row))
+        elif args.artifact_search:
+            store = SubagentStore(paths)
+            rows = store.search_artifacts(args.artifact_search)
+            receipt = audit.append("subagent.artifacts.searched", {"query": args.artifact_search, "count": len(rows), "limit": 20, "browser_auto_launch": False, "external_action_started": False, "raw_secret_values_included": False})
+            payload = {"query": args.artifact_search, "artifacts": rows, "receipt": receipt["id"], "browser_auto_launch": False, "external_action_started": False}
+            print(json.dumps(payload, indent=2) if args.json else format_artifact_search(args.artifact_search, rows))
         elif args.spawn:
             queue = SubagentQueue()
             record = queue.spawn(args.spawn)
@@ -1175,6 +1202,57 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps(orchestrator.cancel_background(agent_args).to_dict(), indent=2))
         elif command == "recover":
             print(json.dumps({"recovered": [record.to_dict() for record in orchestrator.recover_stale_background()]}, indent=2))
+        elif command == "artifacts":
+            artifact_args = args.agent_args
+            store = SubagentStore(paths)
+            if artifact_args and artifact_args[0] in {"show", "read", "artifact"}:
+                artifact_id = " ".join(artifact_args[1:]).strip()
+                if not artifact_id:
+                    parser.error("agents artifacts show requires an artifact id")
+                try:
+                    row = store.artifact(artifact_id)
+                except KeyError as exc:
+                    parser.error(str(exc))
+                receipt = audit.append("subagent.artifact.read", {"surface": "agents", "artifact_id": artifact_id, "path": row.get("path", ""), "browser_auto_launch": False, "external_action_started": False, "raw_secret_values_included": False})
+                payload = {"artifact": row, "receipt": receipt["id"], "browser_auto_launch": False, "external_action_started": False}
+                text = format_artifact(row).replace("SUBAGENT ARTIFACT", "AGENT ARTIFACT", 1)
+                print(json.dumps(payload, indent=2) if args.json else text)
+            elif artifact_args and artifact_args[0] in {"search", "find"}:
+                query = " ".join(artifact_args[1:]).strip()
+                if not query:
+                    parser.error("agents artifacts search requires a query")
+                rows = store.search_artifacts(query)
+                receipt = audit.append("subagent.artifacts.searched", {"surface": "agents", "query": query, "count": len(rows), "limit": 20, "browser_auto_launch": False, "external_action_started": False, "raw_secret_values_included": False})
+                payload = {"query": query, "artifacts": rows, "receipt": receipt["id"], "browser_auto_launch": False, "external_action_started": False}
+                text = format_artifact_search(query, rows).replace("SUBAGENT ARTIFACT SEARCH", "AGENT ARTIFACT SEARCH", 1)
+                print(json.dumps(payload, indent=2) if args.json else text)
+            elif artifact_args:
+                parser.error("agents artifacts accepts: show <artifact-id>, search <query>, or no arguments")
+            else:
+                rows = store.artifacts()
+                receipt = audit.append("subagent.artifacts.listed", {"surface": "agents", "count": len(rows), "limit": 50, "browser_auto_launch": False, "external_action_started": False, "raw_secret_values_included": False})
+                payload = {"artifacts": rows, "receipt": receipt["id"], "browser_auto_launch": False, "external_action_started": False}
+                text = format_artifacts(rows).replace("SUBAGENT ARTIFACTS", "AGENT ARTIFACTS", 1)
+                print(json.dumps(payload, indent=2) if args.json else text)
+        elif command == "artifact":
+            if not agent_args:
+                parser.error("agents artifact requires an artifact id")
+            try:
+                row = SubagentStore(paths).artifact(agent_args)
+            except KeyError as exc:
+                parser.error(str(exc))
+            receipt = audit.append("subagent.artifact.read", {"surface": "agents", "artifact_id": agent_args, "path": row.get("path", ""), "browser_auto_launch": False, "external_action_started": False, "raw_secret_values_included": False})
+            payload = {"artifact": row, "receipt": receipt["id"], "browser_auto_launch": False, "external_action_started": False}
+            text = format_artifact(row).replace("SUBAGENT ARTIFACT", "AGENT ARTIFACT", 1)
+            print(json.dumps(payload, indent=2) if args.json else text)
+        elif command == "search-artifacts":
+            if not agent_args:
+                parser.error("agents search-artifacts requires a query")
+            rows = SubagentStore(paths).search_artifacts(agent_args)
+            receipt = audit.append("subagent.artifacts.searched", {"surface": "agents", "query": agent_args, "count": len(rows), "limit": 20, "browser_auto_launch": False, "external_action_started": False, "raw_secret_values_included": False})
+            payload = {"query": agent_args, "artifacts": rows, "receipt": receipt["id"], "browser_auto_launch": False, "external_action_started": False}
+            text = format_artifact_search(agent_args, rows).replace("SUBAGENT ARTIFACT SEARCH", "AGENT ARTIFACT SEARCH", 1)
+            print(json.dumps(payload, indent=2) if args.json else text)
         return 0
 
     if args.command == "tui":

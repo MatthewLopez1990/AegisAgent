@@ -143,11 +143,17 @@ def agent_status(paths: RuntimePaths, *, limits: SubagentLimits | None = None) -
             f"{command} agents contracts",
             f"{command} agents delegate <task>",
             f"{command} agents background <task>",
+            f"{command} agents artifacts",
+            f"{command} agents artifacts show <artifact-id>",
+            f"{command} agents artifacts search <query>",
             "/agents",
             "/agents profiles",
             "/agents contracts",
             "/agents delegate <task>",
             "/agents bg <task>",
+            "/agents artifacts",
+            "/agents artifacts show <artifact-id>",
+            "/agents artifacts search <query>",
         ],
     }
 
@@ -373,6 +379,80 @@ class SubagentStore:
             if len(rows) >= limit:
                 break
         return rows
+
+    def artifacts(self, *, limit: int = 50) -> list[dict[str, Any]]:
+        rows: list[dict[str, Any]] = []
+        for record in self.list(limit=1000):
+            for artifact in record.get("artifacts", []):
+                if isinstance(artifact, dict):
+                    rows.append(artifact)
+        rows.sort(key=lambda artifact: str(artifact.get("created_at") or ""), reverse=True)
+        return rows[:limit]
+
+    def artifact(self, artifact_id: str, *, include_content: bool = True) -> dict[str, Any]:
+        for artifact in self.artifacts(limit=10_000):
+            if artifact.get("id") != artifact_id:
+                continue
+            row = dict(artifact)
+            if include_content:
+                row["content"] = self._artifact_content(row)
+            return row
+        raise KeyError(f"artifact not found: {artifact_id}")
+
+    def search_artifacts(self, query: str, *, limit: int = 20) -> list[dict[str, Any]]:
+        lowered = query.lower().strip()
+        if not lowered:
+            return []
+        matches: list[dict[str, Any]] = []
+        for artifact in self.artifacts(limit=10_000):
+            content = self._artifact_content(artifact)
+            haystack = " ".join(
+                [
+                    str(artifact.get("id") or ""),
+                    str(artifact.get("role") or ""),
+                    str(artifact.get("kind") or ""),
+                    str(artifact.get("title") or ""),
+                    str(artifact.get("summary") or ""),
+                    content,
+                ]
+            ).lower()
+            if lowered not in haystack:
+                continue
+            row = dict(artifact)
+            row["snippet"] = _artifact_snippet(content or str(artifact.get("summary") or ""), lowered)
+            matches.append(row)
+            if len(matches) >= limit:
+                break
+        return matches
+
+    def _artifact_content(self, artifact: dict[str, Any]) -> str:
+        path_text = str(artifact.get("path") or "")
+        if not path_text:
+            inline = str(artifact.get("content") or "")
+            return redact_text(inline).text if inline else ""
+        path = Path(path_text)
+        if path.is_symlink():
+            return ""
+        try:
+            resolved = path.resolve()
+            artifact_root = (self.paths.subagents_dir / "artifacts").resolve()
+            resolved.relative_to(artifact_root)
+        except (OSError, ValueError):
+            return ""
+        if not resolved.is_file():
+            return ""
+        raw = resolved.read_bytes()
+        try:
+            expected_bytes = int(artifact.get("bytes") or 0)
+        except (TypeError, ValueError):
+            expected_bytes = 0
+        expected_sha256 = str(artifact.get("sha256") or "")
+        if expected_bytes and len(raw) != expected_bytes:
+            return ""
+        if expected_sha256 and hashlib.sha256(raw).hexdigest() != expected_sha256:
+            return ""
+        redacted = redact_text(raw[:20_000].decode("utf-8", errors="replace"))
+        return redacted.text
 
     def cascade_stop(self, record_id: str) -> list[SubagentRecord]:
         record = self.get(record_id)
@@ -1025,6 +1105,50 @@ def format_background_jobs(records: list[dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
+def format_artifacts(artifacts: list[dict[str, Any]]) -> str:
+    if not artifacts:
+        return "SUBAGENT ARTIFACTS\nNo durable subagent artifacts found. Use /agents delegate <task> to create role artifacts."
+    lines = ["SUBAGENT ARTIFACTS", "role         kind                 id                         summary"]
+    for artifact in artifacts[:50]:
+        summary = str(artifact.get("summary") or "").replace("\n", " ")
+        if len(summary) > 64:
+            summary = summary[:61] + "..."
+        lines.append(f"{artifact.get('role', ''):<12} {artifact.get('kind', ''):<20} {artifact.get('id', ''):<26} {summary}")
+    return "\n".join(lines)
+
+
+def format_artifact(artifact: dict[str, Any]) -> str:
+    lines = [
+        "SUBAGENT ARTIFACT",
+        f"id        {artifact.get('id', '')}",
+        f"role      {artifact.get('role', '')}",
+        f"kind      {artifact.get('kind', '')}",
+        f"title     {artifact.get('title', '')}",
+        f"path      {artifact.get('path', '')}",
+        f"sha256    {artifact.get('sha256', '')}",
+        f"bytes     {artifact.get('bytes', 0)}",
+        f"redacted  {str(artifact.get('redacted', False)).lower()}",
+        f"inputs    {', '.join(artifact.get('input_artifacts', [])) if artifact.get('input_artifacts') else '-'}",
+        "",
+        "content",
+    ]
+    content = str(artifact.get("content") or artifact.get("summary") or "").strip()
+    lines.extend(content.splitlines()[:80] if content else ["(empty)"])
+    return "\n".join(lines)
+
+
+def format_artifact_search(query: str, artifacts: list[dict[str, Any]]) -> str:
+    if not artifacts:
+        return f"SUBAGENT ARTIFACT SEARCH\nNo artifacts matched `{query}`."
+    lines = ["SUBAGENT ARTIFACT SEARCH", f"query     {query}", "", "matches"]
+    for artifact in artifacts[:20]:
+        snippet = str(artifact.get("snippet") or artifact.get("summary") or "").replace("\n", " ")
+        if len(snippet) > 80:
+            snippet = snippet[:77] + "..."
+        lines.append(f"- {artifact.get('id', '')} [{artifact.get('role', '')}/{artifact.get('kind', '')}] {snippet}")
+    return "\n".join(lines)
+
+
 def format_events(events: list[SubagentEvent]) -> str:
     if not events:
         return "SUBAGENT TIMELINE\nNo events found for that subagent root."
@@ -1038,6 +1162,20 @@ def format_events(events: list[SubagentEvent]) -> str:
 def format_event_line(event: SubagentEvent) -> str:
     role = event.role or "-"
     return f"{event.created_at:<21} {event.event:<18} {role:<12} {event.message}"
+
+
+def _artifact_snippet(content: str, lowered_query: str) -> str:
+    text = " ".join(content.split())
+    if not text:
+        return ""
+    index = text.lower().find(lowered_query)
+    if index < 0:
+        return text[:160]
+    start = max(0, index - 60)
+    end = min(len(text), index + len(lowered_query) + 100)
+    prefix = "..." if start else ""
+    suffix = "..." if end < len(text) else ""
+    return prefix + text[start:end] + suffix
 
 
 def _source_path() -> Path | None:
