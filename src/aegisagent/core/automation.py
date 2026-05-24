@@ -17,6 +17,7 @@ from uuid import uuid4
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from aegisagent.config import RuntimePaths, ensure_runtime
+from aegisagent.core.command_names import terminal_command_name
 from aegisagent.models import utc_now
 from aegisagent.security.audit import AuditLog
 from aegisagent.security.redaction import redact_text
@@ -737,6 +738,7 @@ class AutomationRegistry:
 
 
 def automation_summary(paths: RuntimePaths) -> dict[str, Any]:
+    command = terminal_command_name()
     registry = AutomationRegistry(paths)
     jobs = registry.list(limit=1000)
     return {
@@ -749,7 +751,7 @@ def automation_summary(paths: RuntimePaths) -> dict[str, Any]:
         "external_action_started": False,
         "schedule_worker_started": False,
         "browser_auto_launch": False,
-        "next": "Use `aegisagent automations due` to check schedules, `automations missed` for missed windows, `automations service` for a launchd wrapper, or `automations worker` for an explicit foreground scheduler.",
+        "next": f"Use `{command} automations due` to check schedules, `automations missed` for missed windows, `automations service` for a launchd wrapper, or `automations worker` for an explicit foreground scheduler.",
     }
 
 
@@ -770,6 +772,7 @@ def format_automation(job: AutomationJob | dict[str, Any], *, receipt: str = "")
 
 
 def format_automations(payload: dict[str, Any]) -> str:
+    command = terminal_command_name()
     lines = [
         "AEGIS AUTOMATIONS",
         (
@@ -786,7 +789,7 @@ def format_automations(payload: dict[str, Any]) -> str:
         lines.extend(
             [
                 "No automation records yet.",
-                "create: aegisagent automations create daily-check --schedule \"daily 09:00\" --prompt \"summarize workspace risks\"",
+                f"create: {command} automations create daily-check --schedule \"daily 09:00\" --prompt \"summarize workspace risks\"",
                 "tui:    /automations create daily-check | daily 09:00 | summarize workspace risks",
             ]
         )
@@ -804,19 +807,19 @@ def format_automations(payload: dict[str, Any]) -> str:
         lines.extend(
             [
                 "commands",
-                "- due: aegisagent automations due",
-                "- missed: aegisagent automations missed",
-                "- replay: aegisagent automations replay-missed",
-                "- tick: aegisagent automations tick",
-                "- worker: aegisagent automations worker --max-ticks 5",
-                "- logs: aegisagent automations logs <run-id>",
-                "- service: aegisagent automations service",
-                "- service status: aegisagent automations service-status",
-                "- trigger: aegisagent automations trigger <id>",
-                "- background: aegisagent automations trigger <id> --background",
-                "- pause: aegisagent automations pause <id>",
-                "- resume: aegisagent automations resume <id>",
-                "- delete: aegisagent automations delete <id>",
+                f"- due: {command} automations due",
+                f"- missed: {command} automations missed",
+                f"- replay: {command} automations replay-missed",
+                f"- tick: {command} automations tick",
+                f"- worker: {command} automations worker --max-ticks 5",
+                f"- logs: {command} automations logs <run-id>",
+                f"- service: {command} automations service",
+                f"- service status: {command} automations service-status",
+                f"- trigger: {command} automations trigger <id>",
+                f"- background: {command} automations trigger <id> --background",
+                f"- pause: {command} automations pause <id>",
+                f"- resume: {command} automations resume <id>",
+                f"- delete: {command} automations delete <id>",
             ]
         )
     lines.extend(["", f"next       {payload['next']}"])

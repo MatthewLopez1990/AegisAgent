@@ -5,7 +5,6 @@ import json
 import os
 import sys
 from pathlib import Path
-from pathlib import Path
 
 from aegisagent import __version__
 from aegisagent.config import ensure_runtime, runtime_paths
@@ -14,6 +13,8 @@ from aegisagent.core.agent import AgentRuntime
 from aegisagent.core.automation import AutomationRegistry, automation_summary, format_automation, format_automations, format_due_automations, format_due_run, format_missed_automations, format_missed_replay, format_service_status, format_service_wrapper, format_worker_logs, format_worker_run
 from aegisagent.core.browser_sessions import BrowserSessionStore, browser_summary
 from aegisagent.core.capabilities import capability_map, format_capabilities
+from aegisagent.core.command_names import terminal_command_name
+from aegisagent.core.completion import SUPPORTED_SHELLS, build_completion_script
 from aegisagent.core.connectors import DEFAULT_CONNECTORS, ConnectorStore
 from aegisagent.core.dashboard import dashboard_payload, format_dashboard
 from aegisagent.core.executor import GovernedExecutor
@@ -21,7 +22,7 @@ from aegisagent.core.improvement import ImprovementStore, format_candidate, form
 from aegisagent.core.lifecycle import format_install_status, format_update_status, install_status_payload, install_terminal_shim, update_from_github
 from aegisagent.core.memory import MemoryStore, memory_files
 from aegisagent.core.provider_config import ProviderStore, ProviderUsageStore
-from aegisagent.core.setup_flow import SETUP_SECTIONS, SetupGuide, format_setup_next, format_setup_quickstart, format_setup_section, terminal_command_name
+from aegisagent.core.setup_flow import SETUP_SECTIONS, SetupGuide, format_setup_next, format_setup_quickstart, format_setup_section
 from aegisagent.core.sessions import SessionStore
 from aegisagent.core.skills import SkillLoader
 from aegisagent.core.subagents import (
@@ -50,7 +51,7 @@ from aegisagent.tui.textual_app import run_textual_app
 
 
 def build_parser() -> argparse.ArgumentParser:
-    prog = "aegisagent"
+    prog = "aegis"
     if sys.argv:
         invoked = Path(sys.argv[0]).name
         if invoked in {"aegis", "aegisagent"}:
@@ -64,6 +65,9 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command")
     sub.add_parser("activate", help="Launch the terminal-first AegisAgent TUI, or print activation instructions outside a TTY.")
     sub.add_parser("activation", help="Print terminal activation and browser-off readiness details.")
+    completion = sub.add_parser("completion", help="Emit dependency-free shell completion for the terminal command.")
+    completion.add_argument("shell", choices=SUPPORTED_SHELLS, help="Shell completion format to emit.")
+    completion.add_argument("--program", default="", help="Installed command name. Defaults to the active terminal command.")
 
     setup = sub.add_parser("setup", help="Create local runtime files and show secure setup flow.")
     setup.add_argument("section", nargs="?", choices=(*SETUP_SECTIONS, "next"), help="Show one setup section or the next setup action.")
@@ -251,6 +255,15 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+    if args.command == "completion":
+        program = args.program.strip() or terminal_command_name()
+        try:
+            script = build_completion_script(build_parser(), args.shell, program=program)
+        except ValueError as exc:
+            parser.error(str(exc))
+        print(script, end="")
+        return 0
+
     paths = runtime_paths(args.workspace)
     ensure_runtime(paths)
     audit = AuditLog(paths)
@@ -666,7 +679,7 @@ def main(argv: list[str] | None = None) -> int:
                 print(format_automation(payload["automation"], receipt=payload["receipt"]))
                 print("")
                 print(f"task       {payload['task']['id']}  {payload['task']['status']}")
-                print(f"watch      aegisagent tasks --events {payload['task']['id']}")
+                print(f"watch      {terminal_command_name()} tasks --events {payload['task']['id']}")
         elif command == "due":
             payload = registry.due(now=args.now or None, limit=args.limit, source="cli")
             print(json.dumps(payload, indent=2) if args.json else format_due_automations(payload))
@@ -750,7 +763,7 @@ def main(argv: list[str] | None = None) -> int:
                 print(format_improvement(payload["proposal"], receipt=payload["receipt"]))
                 print("")
                 print(f"task       {payload['task']['id']}  {payload['task']['status']}")
-                print(f"watch      aegisagent tasks --events {payload['task']['id']}")
+                print(f"watch      {terminal_command_name()} tasks --events {payload['task']['id']}")
         elif command == "candidate":
             if not improve_args:
                 parser.error("improve candidate requires a proposal id")
@@ -796,7 +809,7 @@ def main(argv: list[str] | None = None) -> int:
                 print(format_candidate(payload["candidate"], receipt=payload["receipt"]))
                 print("")
                 print(f"task       {payload['task']['id']}  {payload['task']['status']}")
-                print(f"watch      aegisagent tasks --events {payload['task']['id']}")
+                print(f"watch      {terminal_command_name()} tasks --events {payload['task']['id']}")
         elif command == "evidence":
             if not improve_args:
                 parser.error("improve evidence requires a proposal id")

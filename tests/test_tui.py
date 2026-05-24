@@ -1036,7 +1036,7 @@ class TuiRendererTests(unittest.TestCase):
 
             self.assertEqual(result, "dashboard")
             self.assertIn("AEGIS TERMINAL DASHBOARD", output.getvalue())
-            self.assertIn("activate    aegisagent tui", output.getvalue())
+            self.assertIn("activate    aegis tui", output.getvalue())
             self.assertIn("browser_auto_launch=false", output.getvalue())
             self.assertIn("gateway_started=false", output.getvalue())
             self.assertIn("Agents and subagents", output.getvalue())

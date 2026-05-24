@@ -6,11 +6,11 @@ from typing import Any
 from aegisagent.config import RuntimePaths, ensure_runtime
 from aegisagent.core.automation import AutomationRegistry
 from aegisagent.core.browser_sessions import BrowserSessionStore
+from aegisagent.core.command_names import terminal_command_name
 from aegisagent.core.connectors import ConnectorStore
 from aegisagent.core.improvement import ImprovementStore
 from aegisagent.core.provider_config import ProviderUsageStore
 from aegisagent.core.sessions import SessionStore
-from aegisagent.core.setup_flow import terminal_command_name
 from aegisagent.core.subagents import BackgroundJobStore, SubagentStore
 from aegisagent.core.tasks import TaskStore
 from aegisagent.core.tools import enabled_counts
@@ -47,7 +47,7 @@ CAPABILITIES: tuple[Capability, ...] = (
         "Default entrypoint opens the terminal UI in a TTY and prints an activation card outside one.",
         "primary",
         "Keep default launch terminal-first while web stays explicit.",
-        ("aegisagent", "aegisagent activate", "aegisagent tui"),
+        ("aegis", "aegis activate", "aegis tui"),
     ),
     Capability(
         "prompt_first_tui",
@@ -56,7 +56,7 @@ CAPABILITIES: tuple[Capability, ...] = (
         "Composer, slash palette, setup deck, task monitors, and static fallback are available.",
         "primary",
         "Continue polishing narrow terminal copy and help density.",
-        ("aegisagent tui", "aegisagent tui --print", "/commands"),
+        ("aegis tui", "aegis tui --print", "/commands"),
     ),
     Capability(
         "setup_wizard",
@@ -65,7 +65,7 @@ CAPABILITIES: tuple[Capability, ...] = (
         "First launch opens terminal setup with provider, secrets, sandbox, connectors, memory, and checks.",
         "primary",
         "Add deeper provider-specific setup validation as routes mature.",
-        ("aegisagent setup --quick", "aegisagent setup --run-checks", "/setup"),
+        ("aegis setup --quick", "aegis setup --run-checks", "/setup"),
     ),
     Capability(
         "policy_audit_security",
@@ -74,7 +74,7 @@ CAPABILITIES: tuple[Capability, ...] = (
         "Policy gates, secret redaction, sandbox posture, and append-only audit verification are in place.",
         "primary",
         "Expand receipts around future external and browser tool execution.",
-        ("aegisagent tools", "aegisagent audit verify", "/policy shell rg --files"),
+        ("aegis tools", "aegis audit verify", "/policy shell rg --files"),
     ),
     Capability(
         "typed_workspace_tools",
@@ -92,7 +92,7 @@ CAPABILITIES: tuple[Capability, ...] = (
         "Top-level tasks can be queued, detached, watched, inspected, cancelled, and stale-recovered.",
         "primary",
         "Connect richer model-backed execution while preserving receipt trails.",
-        ("aegisagent tasks --submit <request>", "aegisagent tasks --background <request>", "/tasks watch <id>"),
+        ("aegis tasks --submit <request>", "aegis tasks --background <request>", "/tasks watch <id>"),
     ),
     Capability(
         "agents_subagents",
@@ -101,7 +101,7 @@ CAPABILITIES: tuple[Capability, ...] = (
         "Planner, researcher, implementer, and reviewer profiles run through bounded local subagents with visible role contracts, deliverables, budgets, isolated sessions, and audit receipts.",
         "primary",
         "Add stronger model routing and deeper role-specific tool execution.",
-        ("aegisagent agents", "aegisagent agents contracts", "aegisagent agents delegate <task>", "/agents bg <task>"),
+        ("aegis agents", "aegis agents contracts", "aegis agents delegate <task>", "/agents bg <task>"),
     ),
     Capability(
         "memory_sessions_skills",
@@ -110,7 +110,7 @@ CAPABILITIES: tuple[Capability, ...] = (
         "Local memory files, approval-gated curated memory writes, redacted session search, and SKILL.md discovery are available.",
         "primary",
         "Build memory review/delete controls and stronger skill trust metadata.",
-        ("aegisagent memory --add <note> --title <title> --approved", "aegisagent sessions --query <text>", "/memory add"),
+        ("aegis memory --add <note> --title <title> --approved", "aegis sessions --query <text>", "/memory add"),
     ),
     Capability(
         "model_provider_routing",
@@ -119,7 +119,7 @@ CAPABILITIES: tuple[Capability, ...] = (
         "Local provider is default; ready OpenAI-compatible API-key routes can serve terminal chat, failed attempted external calls fall back to the local provider, and usage is recorded in a terminal-visible ledger.",
         "primary",
         "Add multi-provider fallback ordering and subscription bridge readiness.",
-        ("aegisagent chat <prompt>", "aegisagent model usage", "/model usage"),
+        ("aegis chat <prompt>", "aegis model usage", "/model usage"),
     ),
     Capability(
         "connectors_messaging_mcp_browser",
@@ -128,7 +128,7 @@ CAPABILITIES: tuple[Capability, ...] = (
         "Slack, Teams, webhook, MCP, browser, and Open WebUI readiness metadata is visible and gated; terminal web fetch and browser session records are available as approved actions.",
         "primary",
         "Add approved send/connect/open actions with explicit operator confirmation.",
-        ("aegisagent connectors", "aegisagent browser sessions", "/browser open <url> | approve"),
+        ("aegis connectors", "aegis browser sessions", "/browser open <url> | approve"),
     ),
     Capability(
         "gateway_web",
@@ -137,7 +137,7 @@ CAPABILITIES: tuple[Capability, ...] = (
         "FastAPI gateway and web source are optional secondary surfaces; activation never auto-starts them.",
         "secondary",
         "Keep parity with terminal status without making web the default path.",
-        ("aegisagent web", "aegisagent gateway", "/web"),
+        ("aegis web", "aegis gateway", "/web"),
     ),
     Capability(
         "automations_cron",
@@ -146,7 +146,7 @@ CAPABILITIES: tuple[Capability, ...] = (
         "Durable schedule records can be created with interval, daily, weekday, weekend, weekly, monthly, month-end, timezone-aware, and local-date exception labels; checked for due state; checked for missed windows; replayed explicitly; ticked into governed tasks; run through an explicit foreground worker; inspected through persisted worker logs; packaged into an operator-loaded service wrapper; inspected for service status and health metrics; paused; resumed; deleted; and audited.",
         "primary",
         "Add broader typed tool execution and richer model-backed orchestration.",
-        ("aegisagent automations due", "aegisagent automations missed", "/automations due"),
+        ("aegis automations due", "aegis automations missed", "/automations due"),
     ),
     Capability(
         "self_improvement_learning_loop",
@@ -155,7 +155,7 @@ CAPABILITIES: tuple[Capability, ...] = (
         "Durable improvement proposals, failure classification, review gates, advisory repair candidates, read-only candidate diff reviews, candidate verification receipts, verified candidate apply-review handoffs, and evidence-backed implemented state are terminal-visible.",
         "primary",
         "Add external model routing and richer typed tool execution.",
-        ("aegisagent improve diff <candidate-id>", "aegisagent improve verify <candidate-id>", "/improve apply <candidate-id>"),
+        ("aegis improve diff <candidate-id>", "aegis improve verify <candidate-id>", "/improve apply <candidate-id>"),
     ),
     Capability(
         "browser_live_automation",
@@ -164,7 +164,7 @@ CAPABILITIES: tuple[Capability, ...] = (
         "Approved browser session records and screenshot receipts are available without auto-launching a browser.",
         "secondary",
         "Add governed live browser control and screenshot capture when an operator explicitly asks for it.",
-        ("aegisagent browser open <url> --approved", "aegisagent browser screenshot <id> <path> --approved", "/browser"),
+        ("aegis browser open <url> --approved", "aegis browser screenshot <id> <path> --approved", "/browser"),
     ),
     Capability(
         "remote_mobile_control",

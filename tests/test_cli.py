@@ -74,8 +74,8 @@ class CliTests(unittest.TestCase):
 
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("AEGIS TERMINAL ACTIVATION", result.stdout)
-        self.assertIn("primary     aegisagent tui", result.stdout)
-        self.assertIn("default     aegisagent -> terminal TUI", result.stdout)
+        self.assertIn("primary     aegis tui", result.stdout)
+        self.assertIn("default     aegis -> terminal TUI", result.stdout)
         self.assertIn("browser_auto_launch: false", result.stdout)
         self.assertIn("gateway_started: false", result.stdout)
         self.assertNotIn("usage:", result.stdout.lower())
@@ -112,8 +112,8 @@ class CliTests(unittest.TestCase):
 
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("AEGIS TERMINAL ACTIVATION", result.stdout)
-        self.assertIn("optional web: aegisagent web", result.stdout)
-        self.assertIn("serve web:    aegisagent web --serve --approved", result.stdout)
+        self.assertIn("optional web: aegis web", result.stdout)
+        self.assertIn("serve web:    aegis web --serve --approved", result.stdout)
         self.assertIn("browser_required: false", result.stdout)
         self.assertIn("source      PYTHONPATH=src python3 -m aegisagent", result.stdout)
 
@@ -127,16 +127,48 @@ class CliTests(unittest.TestCase):
         self.assertFalse(payload["browser_auto_launch"])
         self.assertFalse(payload["gateway_started"])
         self.assertFalse(payload["external_action_started"])
-        self.assertEqual(payload["primary_command"], "aegisagent tui")
+        self.assertEqual(payload["primary_command"], "aegis tui")
         self.assertTrue(payload["web_gui"]["optional"])
-        self.assertEqual(payload["web_gui"]["command"], "aegisagent web")
-        self.assertEqual(payload["web_gui"]["serve_command"], "aegisagent web --serve --approved")
+        self.assertEqual(payload["web_gui"]["command"], "aegis web")
+        self.assertEqual(payload["web_gui"]["serve_command"], "aegis web --serve --approved")
         self.assertFalse(payload["web_gui"]["opens_browser"])
         self.assertFalse(payload["web_gui"]["gateway_starts_by_default"])
         self.assertIn("/activation", payload["tui_commands"])
         self.assertIn("/dashboard", payload["tui_commands"])
         self.assertIn("/install", payload["tui_commands"])
         self.assertIn("/update", payload["tui_commands"])
+
+    def test_completion_command_emits_shell_scripts_without_runtime_side_effects(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            for shell, marker in (
+                ("bash", "complete -F _aegis aegis"),
+                ("zsh", "#compdef aegis"),
+                ("fish", "complete -c aegis"),
+            ):
+                result = run_cli("completion", shell, cwd=tmp)
+
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn(marker, result.stdout)
+                for token in ("setup", "tui", "web", "tasks", "agents", "completion"):
+                    self.assertIn(token, result.stdout)
+                self.assertIn("--workspace", result.stdout)
+                self.assertNotIn("OPENAI_API_KEY=", result.stdout)
+                self.assertNotIn("SLACK_BOT_TOKEN=", result.stdout)
+                self.assertNotIn("gateway_started: true", result.stdout)
+
+            custom = run_cli("completion", "zsh", "--program", "aegis-test", cwd=tmp)
+            self.assertEqual(custom.returncode, 0, custom.stderr)
+            self.assertIn("#compdef aegis-test", custom.stdout)
+
+            env_named = run_cli("completion", "fish", cwd=tmp, extra_env={"AEGIS_COMMAND_NAME": "aegis-env"})
+            self.assertEqual(env_named.returncode, 0, env_named.stderr)
+            self.assertIn("complete -c aegis-env", env_named.stdout)
+
+            rejected = run_cli("completion", "bash", "--program", "aegis; open http://127.0.0.1:8787", cwd=tmp)
+            self.assertEqual(rejected.returncode, 2)
+            self.assertIn("completion program must contain only", rejected.stderr)
+            self.assertNotIn("complete -F", rejected.stdout)
+            self.assertFalse((Path(tmp) / ".aegisagent").exists())
 
     def test_web_command_is_preview_only_until_serve_is_approved(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -276,6 +308,7 @@ class CliTests(unittest.TestCase):
             self.assertFalse(status_payload["installed"])
             self.assertFalse(status_payload["browser_auto_launch"])
             self.assertEqual(status_payload["install_command"], "aegis install shim --approved --name aegis")
+            self.assertEqual(status_payload["completion_command"], "aegis completion zsh >> ~/.zshrc")
 
             preview = run_cli("--json", "install", "shim", "--bin-dir", str(bin_dir), "--name", "aegis-test", cwd=tmp)
             self.assertEqual(preview.returncode, 1)
@@ -319,6 +352,45 @@ class CliTests(unittest.TestCase):
         self.assertIn("primary     aegis-test tui", result.stdout)
         self.assertIn("browser_auto_launch: false", result.stdout)
         self.assertNotIn("gateway_started: true", result.stdout)
+
+    def test_default_aegis_shim_runs_help_and_completion(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp) / "workspace"
+            workspace.mkdir()
+            (workspace / "src").symlink_to((Path.cwd() / "src").resolve(), target_is_directory=True)
+            bin_dir = Path(tmp) / "bin"
+            installed = run_cli("install", "shim", "--bin-dir", str(bin_dir), "--approved", cwd=str(workspace))
+            self.assertEqual(installed.returncode, 0, installed.stderr)
+
+            shim = bin_dir / "aegis"
+            activation = subprocess.run(
+                [str(shim), "activation"],
+                text=True,
+                capture_output=True,
+                check=False,
+                env={"AEGIS_PYTHON": sys.executable, "PYTHONPATH": "src"},
+            )
+            help_result = subprocess.run(
+                [str(shim), "tui", "--help"],
+                text=True,
+                capture_output=True,
+                check=False,
+                env={"AEGIS_PYTHON": sys.executable, "PYTHONPATH": "src"},
+            )
+            completion = subprocess.run(
+                [str(shim), "completion", "bash"],
+                text=True,
+                capture_output=True,
+                check=False,
+                env={"AEGIS_PYTHON": sys.executable, "PYTHONPATH": "src"},
+            )
+
+        self.assertEqual(activation.returncode, 0, activation.stderr)
+        self.assertIn("primary     aegis tui", activation.stdout)
+        self.assertEqual(help_result.returncode, 0, help_result.stderr)
+        self.assertIn("usage: aegis tui", help_result.stdout)
+        self.assertEqual(completion.returncode, 0, completion.stderr)
+        self.assertIn("complete -F _aegis aegis", completion.stdout)
 
     def test_install_shim_rejects_invalid_command_names_without_writing(self):
         for name in ("bad/name", "bad name", "bad;name"):
@@ -1265,7 +1337,7 @@ class CliTests(unittest.TestCase):
             self.assertEqual(resumed.returncode, 0, resumed.stderr)
             self.assertIn("ACTIVE", resumed.stdout)
 
-            worker = run_cli("automations", "worker", "--now", "2026-05-24T10:00:00Z", "--interval", "0", "--max-ticks", "1", cwd=tmp)
+            worker = run_cli("automations", "worker", "--now", "2099-01-01T10:00:00Z", "--interval", "0", "--max-ticks", "1", cwd=tmp)
             self.assertEqual(worker.returncode, 0, worker.stderr)
             self.assertIn("AEGIS AUTOMATION WORKER", worker.stdout)
             self.assertIn("schedule_worker_started=true", worker.stdout)
@@ -1752,7 +1824,7 @@ class CliTests(unittest.TestCase):
         )
 
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("usage: aegisagent tui", result.stdout)
+        self.assertIn("usage: aegis tui", result.stdout)
         self.assertIn("--print", result.stdout)
         self.assertIn("--classic", result.stdout)
         self.assertNotIn("Textual", result.stdout)

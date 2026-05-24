@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-import os
 from typing import Any
 
 from aegisagent import __version__
 from aegisagent.config import RuntimePaths
+from aegisagent.core.command_names import terminal_command_name
 from aegisagent.core.connectors import ConnectorStore
 from aegisagent.core.memory import MemoryStore
 from aegisagent.core.provider_config import ProviderStore
@@ -18,10 +18,6 @@ from aegisagent.security.sandbox import detect_sandbox
 
 SETUP_SECTIONS = ("model", "secrets", "sandbox", "tools", "connectors", "memory")
 SETUP_NEXT_SECTION_COUNT = len(SETUP_SECTIONS)
-
-
-def terminal_command_name() -> str:
-    return os.environ.get("AEGIS_COMMAND_NAME", "aegis").strip() or "aegis"
 
 
 @dataclass(frozen=True, slots=True)

@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from aegisagent.config import RuntimePaths
+from aegisagent.core.command_names import terminal_command_name
 from aegisagent.security.redaction import redact_text
 
 
@@ -198,7 +199,8 @@ class LocalTerminalProvider:
                     f"browser_auto_launch={str(metadata.get('browser_auto_launch', False)).lower()}."
                 )
                 if status == "needs_approval":
-                    lines.append("Approve explicitly with `/web fetch <url> | approve` or `aegisagent fetch <url> --approved`.")
+                    command = terminal_command_name()
+                    lines.append(f"Approve explicitly with `/web fetch <url> | approve` or `{command} fetch <url> --approved`.")
                 elif payload.get("body"):
                     preview = str(payload.get("body", "")).strip().splitlines()[:8]
                     lines.append("Preview:")
@@ -470,6 +472,7 @@ def _usage_from_openai_payload(payload: dict[str, Any]) -> dict[str, int]:
 
 
 def _blocked_external_response(provider: str, status: str, detail: str) -> ModelResponse:
+    command = terminal_command_name()
     return ModelResponse(
         provider=provider,
         mode="api_key",
@@ -478,7 +481,7 @@ def _blocked_external_response(provider: str, status: str, detail: str) -> Model
             f"- Provider: {provider}\n"
             f"- Status: {status}\n"
             f"- Detail: {redact_text(detail).text}\n"
-            "- Next: run `aegisagent model doctor` and keep using the local terminal provider until the route is ready."
+            f"- Next: run `{command} model doctor` and keep using the local terminal provider until the route is ready."
         ),
         metadata={
             "external_model_invocation_performed": False,

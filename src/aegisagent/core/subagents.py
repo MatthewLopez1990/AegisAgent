@@ -13,6 +13,7 @@ from typing import Any, Callable
 from uuid import uuid4
 
 from aegisagent.config import RuntimePaths, ensure_runtime
+from aegisagent.core.command_names import terminal_command_name
 from aegisagent.core.sessions import SessionStore
 from aegisagent.models import utc_now
 from aegisagent.security.audit import AuditLog
@@ -91,6 +92,7 @@ def _profile_contract(role: str) -> dict[str, str]:
 
 def agent_contracts_payload(paths: RuntimePaths, *, limits: SubagentLimits | None = None) -> dict[str, Any]:
     resolved_limits = limits or SubagentLimits()
+    command = terminal_command_name()
     ensure_runtime(paths)
     return {
         "surface": "agent_contracts",
@@ -105,7 +107,7 @@ def agent_contracts_payload(paths: RuntimePaths, *, limits: SubagentLimits | Non
         },
         "profiles": [_profile_contract(profile["role"]) for profile in AGENT_PROFILES],
         "next": [
-            "Use `aegisagent agents delegate <task>` to run these contracts once.",
+            f"Use `{command} agents delegate <task>` to run these contracts once.",
             "Use `/agents bg <task>` for a nonblocking contracted delegation.",
             "Review audit receipts for contract_version before trusting a delegation summary.",
         ],
@@ -114,6 +116,7 @@ def agent_contracts_payload(paths: RuntimePaths, *, limits: SubagentLimits | Non
 
 def agent_status(paths: RuntimePaths, *, limits: SubagentLimits | None = None) -> dict[str, Any]:
     resolved_limits = limits or SubagentLimits()
+    command = terminal_command_name()
     ensure_runtime(paths)
     return {
         "surface": "agents",
@@ -131,11 +134,11 @@ def agent_status(paths: RuntimePaths, *, limits: SubagentLimits | None = None) -
         "persisted_subagents": len(SubagentStore(paths).list(limit=1000)),
         "background_jobs": len(BackgroundJobStore(paths).list(limit=1000)),
         "commands": [
-            "aegisagent agents",
-            "aegisagent agents profiles",
-            "aegisagent agents contracts",
-            "aegisagent agents delegate <task>",
-            "aegisagent agents background <task>",
+            f"{command} agents",
+            f"{command} agents profiles",
+            f"{command} agents contracts",
+            f"{command} agents delegate <task>",
+            f"{command} agents background <task>",
             "/agents",
             "/agents profiles",
             "/agents contracts",

@@ -1,13 +1,13 @@
 from __future__ import annotations
 
-import os
 from typing import Any
 
 from aegisagent.config import RuntimePaths
+from aegisagent.core.command_names import terminal_command_name
 
 
 def terminal_activation_payload(paths: RuntimePaths) -> dict[str, Any]:
-    command_name = os.environ.get("AEGIS_COMMAND_NAME", "aegisagent").strip() or "aegisagent"
+    command_name = terminal_command_name()
     primary_command = f"{command_name} tui"
     fallback = f"{command_name} tui --print"
     return {

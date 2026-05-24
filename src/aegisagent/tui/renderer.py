@@ -254,6 +254,7 @@ def render_help(width: int, height: int) -> str:
         _row("/tools", "tool policy matrix and approval posture", width),
         _row("/agents bg <task>", "start bounded background agent work", width),
         _row("/git status", "read-only typed git inspection", width),
+        _row("aegis completion zsh|bash|fish", "print shell completion outside the TUI", width),
         _row("/web", "print optional web console instructions only", width),
     ]
     while len(lines) < height - 4:

@@ -12,6 +12,7 @@ from typing import Any
 from uuid import uuid4
 
 from aegisagent.config import RuntimePaths, ensure_runtime
+from aegisagent.core.command_names import terminal_command_name
 from aegisagent.models import utc_now
 from aegisagent.security.audit import AuditLog
 from aegisagent.security.redaction import redact_text
@@ -935,6 +936,7 @@ def format_improvement(proposal: ImprovementProposal | dict[str, Any], *, receip
 
 
 def format_improvements(payload: dict[str, Any]) -> str:
+    command = terminal_command_name()
     lines = [
         "AEGIS IMPROVEMENTS",
         (
@@ -952,7 +954,7 @@ def format_improvements(payload: dict[str, Any]) -> str:
         lines.extend(
             [
                 "No improvement proposals yet.",
-                "create: aegisagent improve propose \"policy denied a needed safe git read\" --target policy --operation evaluate",
+                f"create: {command} improve propose \"policy denied a needed safe git read\" --target policy --operation evaluate",
                 "tui:    /improve propose policy denied a needed safe git read",
             ]
         )
@@ -969,15 +971,15 @@ def format_improvements(payload: dict[str, Any]) -> str:
         lines.extend(
             [
                 "commands",
-                "- show: aegisagent improve show <id>",
-                "- approve: aegisagent improve approve <id> --rationale <text>",
-                "- implement: aegisagent improve implement <id>",
-                "- candidate: aegisagent improve candidate <id>",
-                "- verify: aegisagent improve verify <candidate-id>",
-                "- apply: aegisagent improve apply <candidate-id>",
-                "- evidence: aegisagent improve evidence <id> --files <paths> --validation <command> --result <result>",
-                "- complete: aegisagent improve complete <id>",
-                "- reject: aegisagent improve reject <id> --rationale <text>",
+                f"- show: {command} improve show <id>",
+                f"- approve: {command} improve approve <id> --rationale <text>",
+                f"- implement: {command} improve implement <id>",
+                f"- candidate: {command} improve candidate <id>",
+                f"- verify: {command} improve verify <candidate-id>",
+                f"- apply: {command} improve apply <candidate-id>",
+                f"- evidence: {command} improve evidence <id> --files <paths> --validation <command> --result <result>",
+                f"- complete: {command} improve complete <id>",
+                f"- reject: {command} improve reject <id> --rationale <text>",
             ]
         )
     lines.extend(["", "next"])
@@ -1037,6 +1039,7 @@ def _candidate_apply_prompt(proposal: ImprovementProposal, candidate: Improvemen
     patch_plan = "\n".join(f"- {item}" for item in candidate.patch_plan)
     verification = "\n".join(f"- {item}" for item in candidate.verification_commands)
     risks = "\n".join(f"- {item}" for item in candidate.risk_notes)
+    command = terminal_command_name()
     return "\n".join(
         [
             f"Apply verified improvement candidate {candidate.id} for proposal {proposal.id}.",
@@ -1065,7 +1068,7 @@ def _candidate_apply_prompt(proposal: ImprovementProposal, candidate: Improvemen
             "- do not launch a browser unless explicitly requested",
             "- do not include raw secret values in artifacts, prompts, or receipts",
             "- keep workspace mutation governed by normal operator and policy controls",
-            "- record changed files and verification output with `aegisagent improve evidence` before completion",
+            f"- record changed files and verification output with `{command} improve evidence` before completion",
             "- do not mark the proposal implemented until changed-file evidence is recorded",
         ]
     )
@@ -1342,12 +1345,13 @@ def _suggested_candidate_files(proposal: ImprovementProposal) -> list[str]:
 
 
 def _candidate_patch_plan(proposal: ImprovementProposal) -> list[str]:
+    command = terminal_command_name()
     return [
         f"Inspect {proposal.target_subsystem} / {proposal.operation} around the failure summary.",
         f"Implement the smallest governed change matching: {proposal.proposed_action}",
         "Keep the terminal-first/no-browser contract visible in human and JSON output.",
         "Add a focused regression that covers the failing class and the safety flags.",
-        "Record changed files and verification output with `aegisagent improve evidence` before completion.",
+        f"Record changed files and verification output with `{command} improve evidence` before completion.",
     ]
 
 

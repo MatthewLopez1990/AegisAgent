@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from aegisagent.config import DEFAULT_CONFIG, RuntimePaths, ensure_runtime
+from aegisagent.core.command_names import terminal_command_name
 from aegisagent.security.audit import AuditLog
 
 
@@ -150,13 +151,14 @@ class ConnectorStore:
 
     def summary(self) -> dict[str, Any]:
         routes = [route.to_dict() for route in self.routes()]
+        command = terminal_command_name()
         return {
             "connectors": routes,
             "enabled_count": sum(1 for route in routes if route["enabled"]),
             "external_action_started": False,
             "external_delivery_performed": False,
             "browser_auto_launch": False,
-            "next": "Use `aegisagent connectors configure slack --token-env SLACK_BOT_TOKEN --enable`, then `aegisagent connectors doctor` before any future send action.",
+            "next": f"Use `{command} connectors configure slack --token-env SLACK_BOT_TOKEN --enable`, then `{command} connectors doctor` before any future send action.",
         }
 
     def doctor(self) -> dict[str, Any]:

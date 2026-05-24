@@ -8,6 +8,7 @@ from typing import Any
 from uuid import uuid4
 
 from aegisagent.config import DEFAULT_CONFIG, RuntimePaths, ensure_runtime
+from aegisagent.core.command_names import terminal_command_name
 from aegisagent.security.audit import AuditLog
 
 
@@ -106,6 +107,7 @@ class ProviderStore:
 
     def summary(self) -> dict[str, Any]:
         routes = [route.to_dict() for route in self.routes()]
+        command = terminal_command_name()
         return {
             "active_provider": self.active_provider(),
             "mode": self.route(self.active_provider()).mode if self.active_provider() in {route["name"] for route in routes} else "unknown",
@@ -113,7 +115,7 @@ class ProviderStore:
             "browser_required": False,
             "external_action_started": False,
             "model_invocation_performed": False,
-            "next": "Use `aegisagent model configure <name> --mode api_key --api-key-env OPENAI_API_KEY` or keep `local/terminal-v0` active.",
+            "next": f"Use `{command} model configure <name> --mode api_key --api-key-env OPENAI_API_KEY` or keep `local/terminal-v0` active.",
         }
 
     def doctor(self) -> dict[str, Any]:

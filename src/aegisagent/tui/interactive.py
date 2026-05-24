@@ -377,6 +377,7 @@ COMMAND_MENU_GROUPS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
             ("/subagents recover", "mark dead background workers failed"),
             ("/subagents watch <root-id>", "show persisted subagent timeline"),
             ("/commands [prefix]", "filter command palette"),
+            ("/commands completion", "show shell completion commands for aegis completion bash/zsh/fish"),
             ("/help", "show terminal controls"),
         ),
     ),
@@ -952,6 +953,7 @@ def dispatch_interactive_command(command: str, paths: RuntimePaths) -> str:
         print("- Use /activation to show the exact terminal startup path.")
         print("- Use /dashboard for a terminal-only operator posture summary.")
         print("- Use /install and /update for macOS/Linux terminal lifecycle commands.")
+        print("- Outside the TUI, use `aegis completion zsh|bash|fish` for shell completion.")
         print("- Use /capabilities or /gaps to inspect Hermes-class parity from the terminal.")
         print("- Use /automations to manage durable gated schedule records.")
         print("- Use /improve to track reviewed self-improvement proposals.")

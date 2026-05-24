@@ -111,12 +111,22 @@ PYTHONPATH=src python3 -m aegisagent health
 | `aegis capabilities` | Show implemented and partial capability areas. |
 | `aegis capabilities --gaps` | Show remaining gaps only. |
 | `aegis update --approved` | Pull the latest GitHub `main` into the installed checkout. |
+| `aegis completion zsh` | Print shell completion for zsh. Also supports `bash` and `fish`. |
 | `aegis tui --print` | Print a static terminal frame for docs, CI, or non-interactive terminals. |
+
+Optional shell completion:
+
+```bash
+aegis completion zsh >> ~/.zshrc
+aegis completion bash >> ~/.bashrc
+aegis completion fish > ~/.config/fish/completions/aegis.fish
+```
 
 ## Useful TUI Slash Commands
 
 ```text
 /commands
+/commands completion
 /setup next
 /setup model
 /setup sandbox

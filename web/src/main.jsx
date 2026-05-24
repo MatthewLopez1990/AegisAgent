@@ -149,7 +149,7 @@ function App() {
           <span className="dot red" />
           <span className="dot amber" />
           <span className="dot green" />
-          <span className="title">aegisagent web --gateway 127.0.0.1:8787</span>
+          <span className="title">aegis web --serve --approved --host 127.0.0.1 --port 8787</span>
           <span className="mode">{gateway.status === "live" ? "gateway live" : gateway.status === "partial" ? "partial data" : "offline fallback"}</span>
         </div>
 
@@ -350,7 +350,7 @@ function Approvals() {
       <div className="approval-card large">
         <strong>no web mutation controls</strong>
         <p>Current gateway parity routes are read-only. Approved writes, browser opens, remote pulls, and task execution stay in CLI/TUI approval flows.</p>
-        <code>aegisagent tui{"\n"}/git remote pull origin main | approve{"\n"}/update origin main | approve</code>
+        <code>aegis tui{"\n"}/git remote pull origin main | approve{"\n"}/update origin main | approve</code>
       </div>
     </div>
   );
