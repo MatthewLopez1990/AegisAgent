@@ -159,6 +159,25 @@ class TerminalAgentSessionTests(unittest.TestCase):
             self.assertIn("[REDACTED]", payload["content"])
             self.assertTrue(allowed.metadata["redacted"])
 
+    def test_workspace_list_and_search_skip_symlink_files(self):
+        with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as outside:
+            paths = runtime_paths(tmp)
+            (paths.workspace / "inside.txt").write_text("needle inside\n", encoding="utf-8")
+            outside_file = Path(outside) / "outside.txt"
+            outside_file.write_text("needle outside\n", encoding="utf-8")
+            try:
+                (paths.workspace / "link-out.txt").symlink_to(outside_file)
+            except OSError:
+                self.skipTest("filesystem does not allow symlink creation")
+
+            runner = WorkspaceToolRunner(paths)
+            listed = json.loads(runner.list_files(limit=20).content)
+            searched = json.loads(runner.search_text("needle", limit=20).content)
+
+            self.assertIn("inside.txt", listed["files"])
+            self.assertNotIn("link-out.txt", listed["files"])
+            self.assertEqual([match["path"] for match in searched["matches"]], ["inside.txt"])
+
     def test_workspace_replace_text_requires_approval_and_stays_in_workspace(self):
         with tempfile.TemporaryDirectory() as tmp:
             paths = runtime_paths(tmp)

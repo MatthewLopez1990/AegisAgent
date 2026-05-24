@@ -42,5 +42,5 @@ Still incomplete:
 
 - Full task queue controls such as `/tasks`, `/resume`, `/pause`, and `/cancel` beyond the existing subagent background job controls.
 - Rich model-provider setup/auth routing.
-- `@` path completion and multiline prompt editing.
+- `@` path completion and wrapped prompt rendering were completed later in Checkpoint 112; full multiline newline editing remains incomplete.
 - Global editable install on the Homebrew-managed system Python without a venv; PEP 668 blocks that unless the operator chooses a user/venv/pipx install path.

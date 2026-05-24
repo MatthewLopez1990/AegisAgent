@@ -765,14 +765,17 @@ class WorkspaceToolRunner:
 
     def _iter_workspace_files(self, *, limit: int) -> list[Path]:
         files: list[Path] = []
+        root = self.paths.workspace.resolve()
         for path in sorted(self.paths.workspace.rglob("*")):
             if len(files) >= limit:
                 break
-            if not path.is_file():
+            if path.is_symlink() or not path.is_file():
                 continue
             try:
+                resolved = path.resolve()
+                resolved.relative_to(root)
                 rel = path.relative_to(self.paths.workspace)
-            except ValueError:
+            except (OSError, ValueError):
                 continue
             if rel.name == ".DS_Store":
                 continue

@@ -190,7 +190,8 @@ aegis tui
 ```
 
 `aegis` starts the terminal UI when your shell is interactive. Use `aegis tui`
-when you want the explicit command.
+when you want the explicit command. `aegis activation` only prints readiness.
+These commands do not start the gateway, Vite, or a browser.
 
 ## Use The Agent
 
@@ -199,9 +200,17 @@ Type normal requests at the prompt:
 ```text
 summarize this workspace
 read file README.md
+summarize @README.md
+review @src/aegisagent/tui/interactive.py
 git status
 run tests
 ```
+
+Inside the TUI composer, type `@` plus a partial workspace path and press `Tab`
+to complete local file and directory references. Composer path completion only
+lists local metadata. It does not open a browser, start the web gateway, call a
+model, read file bodies, or mutate the workspace. The final request still
+follows normal Aegis tool and approval policy.
 
 Use slash commands for direct actions:
 

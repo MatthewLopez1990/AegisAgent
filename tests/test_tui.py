@@ -17,7 +17,7 @@ from aegisagent.core.setup_state import setup_wizard_preferences
 from aegisagent.core.skills import SkillLoader
 from aegisagent.core.subagents import BackgroundJobStore, LocalSubagentOrchestrator, SubagentStore
 from aegisagent.core.tasks import TaskRunner, TaskStore
-from aegisagent.tui.interactive import SLASH_COMMANDS, _CursesAegisAgent, build_interactive_panels, dispatch_interactive_command, normalize_interactive_command, slash_palette_candidates
+from aegisagent.tui.interactive import SLASH_COMMANDS, _CursesAegisAgent, build_interactive_panels, composer_prompt_layout, dispatch_interactive_command, normalize_interactive_command, slash_palette_candidates, workspace_path_candidates
 from aegisagent.tui.renderer import TuiState, render
 
 
@@ -146,7 +146,7 @@ class TuiRendererTests(unittest.TestCase):
 
         output = printed.getvalue()
         self.assertEqual(result, "help")
-        for marker in ("Enter", "Tab", "Arrow keys", "Esc", "q", "/exit", "/commands", "/install", "/update"):
+        for marker in ("Enter", "Tab", "@path", "Arrow keys", "Esc", "q", "/exit", "/commands", "/install", "/update"):
             self.assertIn(marker, output)
         self.assertIn("Web is optional", output)
 
@@ -402,6 +402,73 @@ class TuiRendererTests(unittest.TestCase):
         self.assertTrue(any(command == "/agents monitor" for command, _detail in agent_monitor_matches))
         agent_status_matches = slash_palette_candidates("/agents sta")
         self.assertTrue(any(command == "/agents status" for command, _detail in agent_status_matches))
+
+    def test_workspace_path_candidates_are_workspace_scoped(self):
+        with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as outside:
+            paths = runtime_paths(tmp)
+            (paths.workspace / "src" / "aegisagent" / "tui").mkdir(parents=True)
+            (paths.workspace / "src" / "aegisagent" / "tui" / "interactive.py").write_text("print('ok')\n", encoding="utf-8")
+            (paths.workspace / ".git").mkdir()
+            (paths.workspace / ".git" / "config").write_text("[core]\n", encoding="utf-8")
+            (paths.workspace / "node_modules" / "pkg").mkdir(parents=True)
+            (paths.workspace / "node_modules" / "pkg" / "index.js").write_text("bad\n", encoding="utf-8")
+            (Path(outside) / "secret.txt").write_text("outside\n", encoding="utf-8")
+            try:
+                (paths.workspace / "link-out.txt").symlink_to(Path(outside) / "secret.txt")
+            except OSError:
+                pass
+
+            with patch.object(Path, "read_text", side_effect=AssertionError("completion must not read file bodies")):
+                matches = workspace_path_candidates(paths, "inspect @src/aeg", limit=10)
+                nested_matches = workspace_path_candidates(paths, "inspect @src/aegisagent/t", limit=10)
+                root_matches = workspace_path_candidates(paths, "inspect @link", limit=10)
+
+        self.assertIn(("@src/aegisagent/", "directory"), matches)
+        self.assertIn(("@src/aegisagent/tui/", "directory"), nested_matches)
+        self.assertFalse(any(".git" in candidate for candidate, _detail in matches + nested_matches))
+        self.assertFalse(any("node_modules" in candidate for candidate, _detail in matches + nested_matches))
+        self.assertFalse(any("link-out" in candidate for candidate, _detail in root_matches))
+
+    def test_workspace_path_candidates_reject_escape_prefixes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = runtime_paths(tmp)
+            (paths.workspace / "README.md").write_text("ok\n", encoding="utf-8")
+
+            self.assertEqual(workspace_path_candidates(paths, "read @../", limit=10), [])
+            self.assertEqual(workspace_path_candidates(paths, "read @/tmp", limit=10), [])
+            self.assertEqual(workspace_path_candidates(paths, "read @src/../../", limit=10), [])
+
+    def test_live_tui_tab_completes_workspace_path_token(self):
+        class FakeCurses:
+            A_BOLD = 0
+
+            @staticmethod
+            def color_pair(_number: int) -> int:
+                return 0
+
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = runtime_paths(tmp)
+            (paths.workspace / "src" / "aegisagent").mkdir(parents=True)
+            deck = _CursesAegisAgent(object(), paths, FakeCurses)
+            deck.input_buffer = "please inspect @src/aeg"
+            deck.cursor = len(deck.input_buffer)
+
+            deck._complete_palette()
+
+            self.assertEqual(deck.input_buffer, "please inspect @src/aegisagent/")
+            self.assertEqual(deck.cursor, len(deck.input_buffer))
+            self.assertIn("Completed @src/aegisagent/", deck.message)
+            self.assertFalse(list(paths.browser_sessions_dir.glob("browser-*.json")))
+
+    def test_composer_prompt_layout_wraps_and_tracks_cursor(self):
+        buffer = "x" * 90
+
+        lines, cursor_row, cursor_col = composer_prompt_layout(buffer, len(buffer), width=40)
+
+        self.assertGreater(len(lines), 1)
+        self.assertTrue(all(len(line) <= 39 for line in lines))
+        self.assertEqual("".join(lines), "aegis> " + buffer)
+        self.assertEqual((cursor_row, cursor_col), divmod(len("aegis> ") + len(buffer), 39))
 
     def test_interactive_dispatch_runs_local_agent_turn(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -929,9 +996,16 @@ class TuiRendererTests(unittest.TestCase):
             self.assertIn("recovered.stale", [event.event for event in runner.events(record.id)])
 
     def test_interactive_dispatch_add_dir_records_workspace_context(self):
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as outside:
             paths = runtime_paths(tmp)
             (paths.workspace / "src").mkdir()
+            (paths.workspace / ".hidden").mkdir()
+            (paths.workspace / ".git").mkdir(exist_ok=True)
+            (Path(outside) / "ctx").mkdir()
+            try:
+                (paths.workspace / "link-dir").symlink_to(Path(outside) / "ctx")
+            except OSError:
+                pass
             output = io.StringIO()
 
             with contextlib.redirect_stdout(output):
@@ -941,6 +1015,11 @@ class TuiRendererTests(unittest.TestCase):
             self.assertIn('"status": "ok"', output.getvalue())
             messages = (paths.sessions_dir / next(path.name for path in paths.sessions_dir.glob("main-*.json"))).read_text(encoding="utf-8")
             self.assertIn("session.add_dir", messages)
+            for blocked_path in (".hidden", ".git", "link-dir"):
+                blocked = io.StringIO()
+                with contextlib.redirect_stdout(blocked):
+                    dispatch_interactive_command(f"/add-dir {blocked_path}", paths)
+                self.assertIn('"status": "blocked"', blocked.getvalue())
 
     def test_interactive_dispatch_reads_workspace_file_with_receipt(self):
         with tempfile.TemporaryDirectory() as tmp:

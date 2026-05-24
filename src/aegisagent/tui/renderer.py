@@ -178,7 +178,7 @@ def render_activation(width: int, height: int) -> str:
         rows.append(_blank_panel(width))
     rows.extend([
         _line(width),
-        _row("Enter send | / commands | Tab complete | ? help | q quit", f"{width}x{height} ready", width),
+        _row("Enter send | / commands | Tab complete | @path | ? help | q quit", f"{width}x{height} ready", width),
         _line(width),
         _row("aegis> /activation", "enter to send", width),
     ])
@@ -248,7 +248,7 @@ def render_help(width: int, height: int) -> str:
         _row("key", "action", width),
         _line(width),
         _row("Enter", "send prompt, run selected slash command, or confirm highlighted item", width),
-        _row("Tab / Shift+Tab", "move focus or accept slash palette completion", width),
+        _row("Tab / Shift+Tab", "move focus, accept slash completion, or complete @path", width),
         _row("Arrow keys", "history, palette selection, or setup option movement", width),
         _row("/", "open slash command palette", width),
         _row("?", "show help and current keyboard controls", width),

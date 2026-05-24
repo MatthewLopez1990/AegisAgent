@@ -200,6 +200,21 @@ Root shortcuts do not create singular subcommand families; use `/tasks watch`,
 /exit
 ```
 
+## TUI Composer Path Completion
+
+Inside the live TUI composer, type `@` plus a partial workspace path and press
+`Tab` to complete the highlighted local file or directory reference:
+
+```text
+summarize @README.md
+review @src/aegisagent/tui/interactive.py
+```
+
+This is separate from `aegis completion zsh|bash|fish`, which emits shell
+completion scripts for terminal commands. Composer `@path` completion is local
+metadata only: it does not read file bodies, call a model, open a browser, start
+the gateway, use the network, or mutate files.
+
 ## Model And Connector Metadata
 
 ```bash

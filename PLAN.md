@@ -43,7 +43,7 @@ Run implementation in checkpoints. At each checkpoint, spawn parallel subagents 
 - TUI:
   - Prompt-first stable layout with transcript/composer always reachable.
   - Right security posture pane, approval card, slash palette, setup wizard, tools matrix, audit receipt viewer.
-  - Shortcuts: `Tab`, `Shift+Tab`, `Enter`, `Esc`, `/`, `?`, `:`, `q`, plus visible footer.
+  - Shortcuts: `Tab`, `Shift+Tab`, `Enter`, `Esc`, `/`, `@path`, `?`, `:`, `q`, plus visible footer. `Tab` handles slash-command completion and workspace-scoped composer `@path` completion.
   - Must support 80x24, 120x40, 200x60, no-color mode, and keyboard-only operation.
 - Web GUI:
   - React/Vite app using the same semantic tokens and layout hierarchy as the TUI.
@@ -64,7 +64,7 @@ Run implementation in checkpoints. At each checkpoint, spawn parallel subagents 
 ## Test Plan
 - Unit tests for policy decisions, redaction, command blocklist, sandbox routing, tool schema validation, audit hash chain, session storage, memory limits, and subagent queue rules.
 - Integration tests for CLI commands: `setup`, `health`, `audit verify`, `tools`, `skills`, `subagents`, `gateway`.
-- TUI smoke tests in a PTY at 80x24, 120x40, and 200x60; verify no layout break, composer reachable, help overlay works, approvals keyboard flow works.
+- TUI smoke tests in a PTY at 80x24, 120x40, and 200x60; verify no layout break, composer reachable, `@path` suggestions stay workspace-scoped, help overlay works, approvals keyboard flow works, and no browser or gateway starts from terminal activation/completion.
 - Web tests with Playwright/Browser: desktop and narrow layouts, WebSocket chat streaming, approval buttons, audit viewer, setup wizard, tools matrix.
 - Security acceptance: no secret appears in transcript/audit output; destructive commands fail closed; host writes/network require visible approval; audit verification detects tampering.
 

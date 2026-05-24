@@ -72,6 +72,10 @@ from aegisagent.security.sandbox import detect_sandbox
 from aegisagent.tui.renderer import TuiState, render
 
 
+CONTEXT_COMPLETION_SKIP_DIRS = {".aegisagent", ".git", "node_modules", "__pycache__", ".pytest_cache", "dist", "build"}
+MAX_COMPOSER_ROWS = 3
+
+
 @dataclass(frozen=True)
 class InteractiveItem:
     label: str
@@ -79,6 +83,13 @@ class InteractiveItem:
     command: str = ""
     status: str = ""
     menu: str = ""
+
+
+@dataclass(frozen=True)
+class ContextPathCandidate:
+    token: str
+    detail: str
+    is_dir: bool
 
 
 @dataclass(frozen=True)
@@ -720,12 +731,14 @@ class _CursesAegisAgent:
             self.stdscr.refresh()
             return
         header_h = 4
-        prompt_y = height - 2
         footer_y = height - 1
+        prompt_rows, _cursor_row, _cursor_col = self._prompt_rows(width)
+        prompt_h = len(prompt_rows)
+        prompt_top = max(header_h + 1, footer_y - prompt_h)
         self._draw_header(width)
-        palette = self._palette_candidates()
-        palette_h = min(len(palette), max(0, min(8, prompt_y - header_h - 1))) if self.input_buffer.startswith("/") else 0
-        output_bottom = prompt_y - 1 - palette_h
+        completion_title, completions = self._completion_candidates()
+        palette_h = min(len(completions), max(0, min(8, prompt_top - header_h - 1))) if completions else 0
+        output_bottom = prompt_top - 1 - palette_h
         if palette_h:
             panel_bottom = header_h
         elif self.active_menu:
@@ -736,13 +749,13 @@ class _CursesAegisAgent:
         self._draw_output(output_top, output_bottom, width)
         if palette_h:
             palette_top = output_bottom + 1
-            self._draw_palette(palette, palette_top, prompt_y - 1, width)
+            self._draw_palette(completion_title, completions, palette_top, prompt_top - 1, width)
             self._last_palette_top = palette_top
             self._last_palette_rows = palette_h
         else:
             self._last_palette_top = 0
             self._last_palette_rows = 0
-        self._draw_prompt(prompt_y, width)
+        self._draw_prompt(prompt_top, width)
         self._draw_footer(footer_y, width)
         self.stdscr.refresh()
 
@@ -816,18 +829,19 @@ class _CursesAegisAgent:
         for offset, line in enumerate(visible):
             self._add(top + offset, 1, self._clip(line, width - 2), self._pair(4))
 
-    def _draw_palette(self, palette: list[tuple[str, str]], top: int, bottom: int, width: int) -> None:
-        self._add(top, 0, self._clip(" slash palette ", width - 1), self._pair(2) | self.curses.A_BOLD)
+    def _draw_palette(self, title: str, palette: list[tuple[str, str]], top: int, bottom: int, width: int) -> None:
+        self._add(top, 0, self._clip(f" {title} ", width - 1), self._pair(2) | self.curses.A_BOLD)
         for offset, (command, detail) in enumerate(palette[: max(0, bottom - top)], start=1):
             attr = self._pair(3) | self.curses.A_BOLD if offset - 1 == self.palette_index else self._pair(4)
             self._add(top + offset, 1, self._clip(f"{command:<22} {detail}", width - 2), attr)
 
     def _draw_prompt(self, y: int, width: int) -> None:
-        prompt = "aegis> "
-        self._add(y, 0, " " * max(1, width - 1), self._pair(1))
-        self._add(y, 0, self._clip(prompt + self.input_buffer, width - 1), self._pair(1) | self.curses.A_BOLD)
+        rows, cursor_row, cursor_col = self._prompt_rows(width)
+        for offset, row in enumerate(rows):
+            self._add(y + offset, 0, " " * max(1, width - 1), self._pair(1))
+            self._add(y + offset, 0, self._clip(row, width - 1), self._pair(1) | self.curses.A_BOLD)
         try:
-            self.stdscr.move(y, min(width - 2, len(prompt) + self.cursor))
+            self.stdscr.move(y + cursor_row, min(width - 2, cursor_col))
         except Exception:
             pass
 
@@ -1002,8 +1016,8 @@ class _CursesAegisAgent:
         self._task_monitor_next_refresh = now + 0.5
 
     def _move_history_or_palette(self, delta: int) -> None:
-        palette = self._palette_candidates()
-        if self.input_buffer.startswith("/") and palette:
+        _title, palette = self._completion_candidates()
+        if palette:
             self.palette_index = max(0, min(len(palette) - 1, self.palette_index + delta))
             self.message = f"Highlighted {palette[self.palette_index][0]}; Tab accepts it."
             return
@@ -1016,11 +1030,23 @@ class _CursesAegisAgent:
         self.cursor = len(self.input_buffer)
 
     def _complete_palette(self) -> None:
-        palette = self._palette_candidates()
+        title, palette = self._completion_candidates()
         if not palette:
-            self.message = "No slash command matches."
+            self.message = "No slash command or @path matches."
             return
         command = palette[min(self.palette_index, len(palette) - 1)][0]
+        if title == "context paths":
+            bounds = _context_path_token_bounds(self.input_buffer, self.cursor)
+            if not bounds:
+                self.message = "No @path token at cursor."
+                return
+            start, end = bounds
+            suffix = "" if command.endswith("/") else " "
+            self.input_buffer = self.input_buffer[:start] + command + suffix + self.input_buffer[end:]
+            self.cursor = start + len(command) + len(suffix)
+            self.palette_index = 0
+            self.message = f"Completed {command}; no file content was read."
+            return
         self.input_buffer = command + (" " if command in {"/policy shell", "/read", "/git diff", "/git stage", "/git commit", "/git branch", "/git remote", "/edit replace", "/test", "/verify", "/sessions search", "/submit", "/add-dir", "/memory add", "/memory search", "/memory show", "/memory delete", "/connectors draft", "/connectors send", "/web fetch", "/browser open", "/browser screenshot", "/tasks submit", "/tasks bg", "/tasks run", "/tasks start", "/tasks events", "/tasks output", "/tasks logs", "/tasks watch", "/tasks cancel", "/automations create", "/automations trigger", "/automations pause", "/automations resume", "/automations delete", "/improve propose", "/improve approve", "/improve implement", "/improve handoff", "/improve candidate", "/improve diff", "/improve verify", "/improve apply", "/improve evidence", "/improve complete", "/improve reject", "/model connect", "/subagents bg", "/subagents live", "/subagents monitor", "/subagents status", "/subagents cancel", "/subagents synthesis", "/subagents graph", "/subagents artifacts show", "/subagents artifacts search", "/agents delegate", "/agents bg", "/agents live", "/agents monitor", "/agents status", "/agents cancel", "/agents synthesis", "/agents graph", "/agents artifacts show", "/agents artifacts search", "/q"} else "")
         self.cursor = len(self.input_buffer)
         self.message = f"Completed {command}; add args or press Enter."
@@ -1028,12 +1054,20 @@ class _CursesAegisAgent:
     def _palette_candidates(self) -> list[tuple[str, str]]:
         return slash_palette_candidates(self.input_buffer)
 
+    def _completion_candidates(self) -> tuple[str, list[tuple[str, str]]]:
+        path_candidates = workspace_context_path_candidates(self.paths, self.input_buffer, self.cursor)
+        if path_candidates:
+            return "context paths", [(candidate.token, candidate.detail) for candidate in path_candidates]
+        if self.input_buffer.startswith("/"):
+            return "slash palette", self._palette_candidates()
+        return "slash palette", []
+
     def _handle_mouse(self) -> None:
         try:
             _mouse_id, x, y, _z, _state = self.curses.getmouse()
         except Exception:
             return
-        palette = self._palette_candidates()
+        _title, palette = self._completion_candidates()
         if palette and self._last_palette_top <= y <= self._last_palette_top + self._last_palette_rows:
             index = y - self._last_palette_top - 1
             if index >= 0:
@@ -1062,6 +1096,9 @@ class _CursesAegisAgent:
         self.input_buffer = self.input_buffer[: self.cursor - 1] + self.input_buffer[self.cursor :]
         self.cursor -= 1
         self.palette_index = 0
+
+    def _prompt_rows(self, width: int) -> tuple[list[str], int, int]:
+        return composer_prompt_layout(self.input_buffer, self.cursor, width=width, max_rows=MAX_COMPOSER_ROWS)
 
     def _box(self, bound: PanelBounds, title: str, attr: int) -> None:
         horizontal = "-" * max(0, bound.w - 2)
@@ -1178,6 +1215,7 @@ def dispatch_interactive_command(command: str, paths: RuntimePaths) -> str:
         print("- Enter sends the prompt, dispatches the selected slash command, or confirms the focused item.")
         print("- Type normally to run a local agent turn in the persistent terminal session.")
         print("- Type / to open slash commands; Tab accepts the highlighted command.")
+        print("- Type @path fragments in the composer; Tab completes local workspace paths without reading file bodies.")
         print("- Arrow keys move through history, setup cards, or slash palette candidates.")
         print("- Esc clears transient input or leaves the current overlay.")
         print("- Use /commands for grouped Hermes-style command lanes.")
@@ -1321,16 +1359,25 @@ def dispatch_interactive_command(command: str, paths: RuntimePaths) -> str:
         if not raw_path:
             print("Usage: /add-dir <path>")
             return "add-dir"
-        target = (paths.workspace / raw_path).expanduser().resolve() if not Path(raw_path).expanduser().is_absolute() else Path(raw_path).expanduser().resolve()
+        root = paths.workspace.resolve()
+        raw_candidate = Path(raw_path).expanduser()
+        unresolved = (root / raw_candidate) if not raw_candidate.is_absolute() else raw_candidate
+        target = unresolved.resolve()
         try:
-            target.relative_to(paths.workspace)
+            rel_path = target.relative_to(root)
         except ValueError:
             print_json({"path": raw_path, "status": "blocked", "reason": "context directories must stay inside the workspace"})
+            return "add-dir"
+        if rel_path.parts and (rel_path.parts[0] in CONTEXT_COMPLETION_SKIP_DIRS or any(part.startswith(".") for part in rel_path.parts)):
+            print_json({"path": raw_path, "status": "blocked", "reason": "context directories must not target hidden or internal workspace paths"})
+            return "add-dir"
+        if unresolved.is_symlink():
+            print_json({"path": raw_path, "status": "blocked", "reason": "context directories must not be symlinks"})
             return "add-dir"
         if not target.is_dir():
             print_json({"path": str(target), "status": "blocked", "reason": "directory does not exist"})
             return "add-dir"
-        rel = str(target.relative_to(paths.workspace))
+        rel = str(rel_path)
         receipt = audit.append("session.context_dir_added", {"path": rel, "source": "tui"})
         SessionStore(paths).append("main", "tool", f"Context directory added: {rel}", metadata={"source": "tui", "tool": "session.add_dir", "path": rel, "receipt_id": receipt["id"]})
         print_json({"path": rel, "status": "ok", "receipt": receipt["id"]})
@@ -2279,6 +2326,106 @@ def slash_palette_candidates(buffer: str, *, limit: int = 10) -> list[tuple[str,
     if not stripped.startswith("/"):
         return []
     return [entry for entry in SLASH_COMMANDS if entry[0].startswith(stripped)][:limit]
+
+
+def workspace_path_candidates(paths: RuntimePaths, buffer: str, cursor: int | None = None, *, limit: int = 10) -> list[tuple[str, str]]:
+    cursor = len(buffer) if cursor is None else cursor
+    return [(candidate.token, candidate.detail) for candidate in workspace_context_path_candidates(paths, buffer, cursor, limit=limit)]
+
+
+def workspace_context_path_candidates(paths: RuntimePaths, buffer: str, cursor: int, *, limit: int = 10) -> list[ContextPathCandidate]:
+    bounds = _context_path_token_bounds(buffer, cursor)
+    if not bounds:
+        return []
+    start, end = bounds
+    token = buffer[start:end]
+    fragment = token[1:]
+    if not _context_path_fragment_allowed(fragment):
+        return []
+    if "/" in fragment:
+        parent_fragment, prefix = fragment.rsplit("/", 1)
+    else:
+        parent_fragment, prefix = "", fragment
+    root = paths.workspace.resolve()
+    try:
+        search_dir = (root / parent_fragment).resolve()
+        search_dir.relative_to(root)
+    except (OSError, ValueError):
+        return []
+    if not search_dir.is_dir():
+        return []
+    rows: list[ContextPathCandidate] = []
+    try:
+        children = sorted(search_dir.iterdir(), key=lambda path: (not path.is_dir(), path.name.lower()))
+    except OSError:
+        return []
+    for child in children:
+        if len(rows) >= limit:
+            break
+        if not child.name.startswith(prefix):
+            continue
+        if not _context_path_visible(root, child):
+            continue
+        try:
+            rel = child.resolve().relative_to(root)
+        except (OSError, ValueError):
+            continue
+        rel_text = str(rel)
+        is_dir = child.is_dir()
+        token_text = f"@{rel_text}{'/' if is_dir else ''}"
+        rows.append(ContextPathCandidate(token=token_text, detail="directory" if is_dir else "file", is_dir=is_dir))
+    return rows
+
+
+def composer_prompt_layout(buffer: str, cursor: int, *, width: int, max_rows: int | None = None) -> tuple[list[str], int, int]:
+    prompt = "aegis> "
+    wrap_width = max(8, width - 1)
+    full = prompt + buffer
+    rows = textwrap.wrap(full, width=wrap_width, replace_whitespace=False, drop_whitespace=False, break_long_words=True, break_on_hyphens=False) or [prompt]
+    cursor_prefix = full[: len(prompt) + max(0, min(cursor, len(buffer)))]
+    cursor_rows = textwrap.wrap(cursor_prefix, width=wrap_width, replace_whitespace=False, drop_whitespace=False, break_long_words=True, break_on_hyphens=False) or [""]
+    first_visible = max(0, len(rows) - max_rows) if max_rows else 0
+    visible = rows[first_visible:]
+    if first_visible:
+        visible[0] = "..." + visible[0][3:]
+    cursor_row = max(0, min(len(visible) - 1, len(cursor_rows) - 1 - first_visible))
+    cursor_col = len(cursor_rows[-1]) if len(cursor_rows) - 1 >= first_visible else len(visible[cursor_row])
+    return visible, cursor_row, cursor_col
+
+
+def _context_path_token_bounds(buffer: str, cursor: int) -> tuple[int, int] | None:
+    cursor = max(0, min(cursor, len(buffer)))
+    start = cursor
+    while start > 0 and not buffer[start - 1].isspace():
+        start -= 1
+    end = cursor
+    while end < len(buffer) and not buffer[end].isspace():
+        end += 1
+    token = buffer[start:end]
+    if not token.startswith("@") or token == "@":
+        return None
+    return start, end
+
+
+def _context_path_fragment_allowed(fragment: str) -> bool:
+    if not fragment or fragment.startswith("/") or "\\" in fragment:
+        return False
+    parts = Path(fragment).parts
+    if any(part in {"..", ""} for part in parts):
+        return False
+    if parts and parts[0] in CONTEXT_COMPLETION_SKIP_DIRS:
+        return False
+    return True
+
+
+def _context_path_visible(root: Path, child: Path) -> bool:
+    if child.is_symlink() or child.name.startswith(".") or child.name in CONTEXT_COMPLETION_SKIP_DIRS:
+        return False
+    try:
+        rel = child.resolve().relative_to(root)
+    except (OSError, ValueError):
+        return False
+    return not any(part in CONTEXT_COMPLETION_SKIP_DIRS or part.startswith(".") for part in rel.parts)
 
 
 def _task_watch_lines(paths: RuntimePaths, task_id: str, *, command: str = "/tasks watch") -> list[str]:
