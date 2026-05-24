@@ -528,6 +528,7 @@ class CliTests(unittest.TestCase):
     def test_commands_catalog_is_terminal_only_and_filterable(self):
         with tempfile.TemporaryDirectory() as tmp:
             text = run_cli("commands", "agents", cwd=tmp)
+            subagents_text = run_cli("commands", "subagents", cwd=tmp)
             connectors_text = run_cli("commands", "connectors", cwd=tmp)
             payload_result = run_cli("commands", "--group", "Build", "--json", cwd=tmp)
 
@@ -536,6 +537,11 @@ class CliTests(unittest.TestCase):
         self.assertIn("safety terminal_first=true browser_auto_launch=false gateway_started=false", text.stdout)
         self.assertIn("/agents contracts", text.stdout)
         self.assertIn("/agents delegate <task>", text.stdout)
+        self.assertIn("/agents status <root-id>", text.stdout)
+        self.assertIn("/agents monitor <job-id>", text.stdout)
+        self.assertEqual(subagents_text.returncode, 0, subagents_text.stderr)
+        self.assertIn("/subagents status <root-id>", subagents_text.stdout)
+        self.assertIn("/subagents monitor <job-id>", subagents_text.stdout)
         self.assertEqual(connectors_text.returncode, 0, connectors_text.stderr)
         self.assertIn("/connectors send webhook | <target> | <message> | approve", connectors_text.stdout)
         self.assertIn("approval-gated live webhook delivery", connectors_text.stdout)
@@ -2333,6 +2339,18 @@ class CliTests(unittest.TestCase):
             job_id = json.loads(background.stdout)["id"]
             jobs = run_cli("agents", "jobs", cwd=tmp)
             self.assertIn(job_id, jobs.stdout)
+            run_job = run_cli("subagents", "--run-job", job_id, cwd=tmp)
+            self.assertEqual(run_job.returncode, 0, run_job.stderr)
+            root_id = json.loads(run_job.stdout)["root_id"]
+            monitor = run_cli("agents", "monitor", job_id, cwd=tmp)
+            self.assertEqual(monitor.returncode, 0, monitor.stderr)
+            self.assertIn("AGENT BACKGROUND JOB", monitor.stdout)
+            self.assertIn("AGENT RUN STATUS", monitor.stdout)
+            self.assertIn("AGENT TIMELINE", monitor.stdout)
+            self.assertIn(f"agents status {root_id}", monitor.stdout)
+            monitor_json = run_cli("--json", "agents", "monitor", job_id, cwd=tmp)
+            self.assertEqual(monitor_json.returncode, 0, monitor_json.stderr)
+            self.assertEqual(json.loads(monitor_json.stdout)["root_id"], root_id)
 
             blocked_bg = run_cli("agents", "bg", "background from prior", "--use-artifact", planner_artifact, cwd=tmp, extra_env={"AEGISAGENT_BACKGROUND_NO_SPAWN": "1"})
             self.assertEqual(blocked_bg.returncode, 2)
@@ -2860,6 +2878,54 @@ class CliTests(unittest.TestCase):
             self.assertIn("root.started", result.stdout)
             self.assertIn("worker.completed", result.stdout)
             self.assertIn('"status": "completed"', result.stdout)
+
+    def test_subagent_run_status_is_terminal_readable(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            raw_secret = "sk-runstatussecret1234567890"
+            delegated = run_cli("subagents", "--delegate", f"inspect durable run status {raw_secret}", cwd=tmp)
+            self.assertEqual(delegated.returncode, 0, delegated.stderr)
+            root_id = json.loads(delegated.stdout)["root"]["id"]
+
+            status = run_cli("subagents", "--status", root_id, cwd=tmp)
+            self.assertEqual(status.returncode, 0, status.stderr)
+            self.assertIn("SUBAGENT RUN STATUS", status.stdout)
+            self.assertIn("phase     completed", status.stdout)
+            self.assertIn("progress  workers=4/4", status.stdout)
+            self.assertIn("browser_auto_launch=false", status.stdout)
+            self.assertIn("receipt   ", status.stdout)
+            self.assertIn("[REDACTED]", status.stdout)
+            self.assertNotIn(raw_secret, status.stdout)
+
+            agent_status = run_cli("agents", "status", root_id, cwd=tmp)
+            self.assertEqual(agent_status.returncode, 0, agent_status.stderr)
+            self.assertIn("AGENT RUN STATUS", agent_status.stdout)
+            self.assertIn("recent events", agent_status.stdout)
+            self.assertIn("receipt   ", agent_status.stdout)
+            self.assertNotIn(raw_secret, agent_status.stdout)
+
+            status_json = run_cli("--json", "subagents", "--status", root_id, cwd=tmp)
+            self.assertEqual(status_json.returncode, 0, status_json.stderr)
+            payload = json.loads(status_json.stdout)
+            self.assertEqual(payload["root_id"], root_id)
+            self.assertEqual(payload["phase"], "completed")
+            self.assertEqual(payload["workers_completed"], 4)
+            self.assertFalse(payload["browser_auto_launch"])
+            self.assertTrue(payload["receipt"])
+            self.assertIn("[REDACTED]", json.dumps(payload))
+            self.assertNotIn(raw_secret, json.dumps(payload))
+
+            audit_rows = [json.loads(line) for line in (Path(tmp) / ".aegisagent" / "audit.jsonl").read_text(encoding="utf-8").splitlines() if line.strip()]
+            receipt = next(row for row in audit_rows if row["id"] == payload["receipt"])
+            self.assertEqual(receipt["event_type"], "subagent.run_status.read")
+            self.assertEqual(receipt["payload"]["root_id"], root_id)
+            self.assertEqual(receipt["payload"]["phase"], "completed")
+            self.assertEqual(receipt["payload"]["status"], "completed")
+            self.assertEqual(receipt["payload"]["worker_count"], 4)
+            self.assertGreater(receipt["payload"]["event_count"], 0)
+            self.assertFalse(receipt["payload"]["browser_auto_launch"])
+            self.assertFalse(receipt["payload"]["external_action_started"])
+            self.assertFalse(receipt["payload"]["raw_secret_values_included"])
+            self.assertNotIn(raw_secret, json.dumps(receipt))
 
     def test_subagents_background_job_can_be_run_and_inspected(self):
         with tempfile.TemporaryDirectory() as tmp:

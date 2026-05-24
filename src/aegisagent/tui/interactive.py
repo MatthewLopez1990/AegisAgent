@@ -57,6 +57,7 @@ from aegisagent.core.subagents import (
     format_delegation,
     format_event_line,
     format_events,
+    format_run_status,
     format_synthesis,
     format_stop,
     format_subagent_records,
@@ -215,6 +216,7 @@ SLASH_COMMANDS: tuple[tuple[str, str], ...] = (
     ("/subagents artifacts search", "search durable role artifacts"),
     ("/subagents synthesis", "show coordinator final synthesis for a root delegation"),
     ("/subagents graph", "show coordinator artifact graph for a root delegation"),
+    ("/subagents status", "show durable run status for a root delegation"),
     ("/subagents live", "delegate and stream local worker progress; add | depth 2 for opt-in nested review or | use-artifact <id> | approve"),
     ("/subagents bg", "start background subagent work; add | depth 2 for opt-in nested review or | use-artifact <id> | approve"),
     ("/subagents monitor", "live repaint background subagent job progress"),
@@ -229,6 +231,7 @@ SLASH_COMMANDS: tuple[tuple[str, str], ...] = (
     ("/agents artifacts search", "search durable role artifacts"),
     ("/agents synthesis", "show coordinator final synthesis for a root delegation"),
     ("/agents graph", "show coordinator artifact graph for a root delegation"),
+    ("/agents status", "show durable run status for a root delegation"),
     ("/agents live", "delegate and stream Hermes-style local agent progress; add | depth 2 for opt-in nested review or | use-artifact <id> | approve"),
     ("/agents stream", "alias for /agents live"),
     ("/agents bg", "start background agent work; add | depth 2 for opt-in nested review or | use-artifact <id> | approve"),
@@ -420,6 +423,7 @@ COMMAND_MENU_GROUPS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
             ("/subagents artifacts search <query>", "search durable role artifacts"),
             ("/subagents synthesis <root-id>", "show coordinator final synthesis"),
             ("/subagents graph <root-id>", "show coordinator artifact graph"),
+            ("/subagents status <root-id>", "show durable run status and recent timeline"),
             ("/subagents live <task>", "delegate and stream bounded workers"),
             ("/subagents live <task> | depth 2", "delegate with opt-in nested reviewer topology"),
             ("/subagents live <task> | use-artifact <id> | approve", "delegate and stream bounded workers with approved prior context"),
@@ -439,6 +443,7 @@ COMMAND_MENU_GROUPS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
             ("/agents artifacts search <query>", "search durable role artifacts"),
             ("/agents synthesis <root-id>", "show coordinator final synthesis"),
             ("/agents graph <root-id>", "show coordinator artifact graph"),
+            ("/agents status <root-id>", "show durable run status and recent timeline"),
             ("/agents live <task>", "stream Hermes-style role-worker progress"),
             ("/agents live <task> | depth 2", "stream agents with opt-in nested reviewer topology"),
             ("/agents live <task> | use-artifact <id> | approve", "stream agents with approved prior context"),
@@ -1016,7 +1021,7 @@ class _CursesAegisAgent:
             self.message = "No slash command matches."
             return
         command = palette[min(self.palette_index, len(palette) - 1)][0]
-        self.input_buffer = command + (" " if command in {"/policy shell", "/read", "/git diff", "/git stage", "/git commit", "/git branch", "/git remote", "/edit replace", "/test", "/verify", "/sessions search", "/submit", "/add-dir", "/memory add", "/memory search", "/memory show", "/memory delete", "/connectors draft", "/connectors send", "/web fetch", "/browser open", "/browser screenshot", "/tasks submit", "/tasks bg", "/tasks run", "/tasks start", "/tasks events", "/tasks output", "/tasks logs", "/tasks watch", "/tasks cancel", "/automations create", "/automations trigger", "/automations pause", "/automations resume", "/automations delete", "/improve propose", "/improve approve", "/improve implement", "/improve handoff", "/improve candidate", "/improve diff", "/improve verify", "/improve apply", "/improve evidence", "/improve complete", "/improve reject", "/model connect", "/subagents bg", "/subagents live", "/subagents monitor", "/subagents cancel", "/subagents synthesis", "/subagents graph", "/subagents artifacts show", "/subagents artifacts search", "/agents delegate", "/agents bg", "/agents live", "/agents monitor", "/agents cancel", "/agents synthesis", "/agents graph", "/agents artifacts show", "/agents artifacts search", "/q"} else "")
+        self.input_buffer = command + (" " if command in {"/policy shell", "/read", "/git diff", "/git stage", "/git commit", "/git branch", "/git remote", "/edit replace", "/test", "/verify", "/sessions search", "/submit", "/add-dir", "/memory add", "/memory search", "/memory show", "/memory delete", "/connectors draft", "/connectors send", "/web fetch", "/browser open", "/browser screenshot", "/tasks submit", "/tasks bg", "/tasks run", "/tasks start", "/tasks events", "/tasks output", "/tasks logs", "/tasks watch", "/tasks cancel", "/automations create", "/automations trigger", "/automations pause", "/automations resume", "/automations delete", "/improve propose", "/improve approve", "/improve implement", "/improve handoff", "/improve candidate", "/improve diff", "/improve verify", "/improve apply", "/improve evidence", "/improve complete", "/improve reject", "/model connect", "/subagents bg", "/subagents live", "/subagents monitor", "/subagents status", "/subagents cancel", "/subagents synthesis", "/subagents graph", "/subagents artifacts show", "/subagents artifacts search", "/agents delegate", "/agents bg", "/agents live", "/agents monitor", "/agents status", "/agents cancel", "/agents synthesis", "/agents graph", "/agents artifacts show", "/agents artifacts search", "/q"} else "")
         self.cursor = len(self.input_buffer)
         self.message = f"Completed {command}; add args or press Enter."
 
@@ -1867,7 +1872,17 @@ def dispatch_interactive_command(command: str, paths: RuntimePaths) -> str:
     if command.startswith("/subagents"):
         task = command.removeprefix("/subagents").strip()
         orchestrator = LocalSubagentOrchestrator(paths)
-        if task.startswith("synthesis "):
+        if task.startswith("status "):
+            root_id = task.removeprefix("status ").strip()
+            try:
+                payload = orchestrator.run_status(root_id)
+            except KeyError as exc:
+                print(f"Run status not found: {exc}")
+            else:
+                receipt = audit.append("subagent.run_status.read", {"surface": "tui", "root_id": root_id, "phase": payload["phase"], "status": payload["status"], "worker_count": payload["workers_total"], "event_count": payload["event_count"], "browser_auto_launch": False, "external_action_started": False, "raw_secret_values_included": False})
+                payload["receipt"] = receipt["id"]
+                print(format_run_status(payload))
+        elif task.startswith("synthesis "):
             root_id = task.removeprefix("synthesis ").strip()
             try:
                 synthesis = orchestrator.synthesis(root_id)
@@ -1963,7 +1978,17 @@ def dispatch_interactive_command(command: str, paths: RuntimePaths) -> str:
     if command.startswith("/agents"):
         task = command.removeprefix("/agents").strip()
         orchestrator = LocalSubagentOrchestrator(paths)
-        if task in {"", "status"}:
+        if task.startswith("status ") or task.startswith("run "):
+            root_id = task.removeprefix("status ").removeprefix("run ").strip()
+            try:
+                payload = orchestrator.run_status(root_id)
+            except KeyError as exc:
+                print(f"Run status not found: {exc}")
+            else:
+                receipt = audit.append("subagent.run_status.read", {"surface": "agents_tui", "root_id": root_id, "phase": payload["phase"], "status": payload["status"], "worker_count": payload["workers_total"], "event_count": payload["event_count"], "browser_auto_launch": False, "external_action_started": False, "raw_secret_values_included": False})
+                payload["receipt"] = receipt["id"]
+                print(format_run_status(payload).replace("SUBAGENT RUN STATUS", "AGENT RUN STATUS", 1))
+        elif task in {"", "status"}:
             print(format_agent_status(agent_status(paths)))
         elif task == "profiles":
             print(format_agent_profiles())
@@ -2029,7 +2054,11 @@ def dispatch_interactive_command(command: str, paths: RuntimePaths) -> str:
             print(format_background_job(orchestrator.background_job(task.removeprefix("job ").strip())).replace("SUBAGENT BACKGROUND JOB", "AGENT BACKGROUND JOB", 1))
         elif task.startswith("monitor "):
             job_id = task.removeprefix("monitor ").strip()
-            print("\n".join(_subagent_job_monitor_lines(paths, job_id, command=f"/agents monitor {job_id}".rstrip())).replace("SUBAGENT BACKGROUND JOB", "AGENT BACKGROUND JOB", 1))
+            text = "\n".join(_subagent_job_monitor_lines(paths, job_id, command=f"/agents monitor {job_id}".rstrip()))
+            text = text.replace("SUBAGENT BACKGROUND JOB", "AGENT BACKGROUND JOB", 1)
+            text = text.replace("SUBAGENT RUN STATUS", "AGENT RUN STATUS", 1)
+            text = text.replace("SUBAGENT TIMELINE", "AGENT TIMELINE", 1)
+            print(text)
         elif task in {"unwatch", "stop-watch", "stop watch"}:
             print("No active agent job monitor in static dispatch. In the live TUI this stops the nonblocking agent monitor.")
         elif task in {"recover", "recover-stale"}:
@@ -2292,8 +2321,8 @@ def _subagent_job_monitor_lines(paths: RuntimePaths, job_id: str, *, command: st
         return [f"$ {command}", "", "SUBAGENT JOB MONITOR", str(exc)]
     lines = [f"$ {command}", "", format_background_job(record)]
     if record.root_id:
-        events = LocalSubagentOrchestrator(paths).events(record.root_id)
-        lines.extend(["", format_events(events)])
+        orchestrator = LocalSubagentOrchestrator(paths)
+        lines.extend(["", format_run_status(orchestrator.run_status(record.root_id)), "", format_events(orchestrator.events(record.root_id))])
     else:
         lines.extend(["", "SUBAGENT TIMELINE", "No root id recorded yet. The background worker has not produced subagent events."])
     if record.status not in {"completed", "failed", "cancelled"}:

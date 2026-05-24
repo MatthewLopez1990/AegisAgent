@@ -380,6 +380,8 @@ class TuiRendererTests(unittest.TestCase):
         self.assertTrue(any(command == "/connectors outbox" for command, _detail in connector_outbox_matches))
         subagent_monitor_matches = slash_palette_candidates("/subagents mon")
         self.assertTrue(any(command == "/subagents monitor" for command, _detail in subagent_monitor_matches))
+        subagent_status_matches = slash_palette_candidates("/subagents sta")
+        self.assertTrue(any(command == "/subagents status" for command, _detail in subagent_status_matches))
         subagent_artifact_matches = slash_palette_candidates("/subagents artifacts", limit=20)
         self.assertTrue(any(command == "/subagents artifacts" for command, _detail in subagent_artifact_matches))
         self.assertTrue(any(command == "/subagents artifacts show" for command, _detail in subagent_artifact_matches))
@@ -398,6 +400,8 @@ class TuiRendererTests(unittest.TestCase):
         self.assertTrue(any(command == "/agents artifacts search" for command, _detail in agent_artifact_matches))
         agent_monitor_matches = slash_palette_candidates("/agents mon")
         self.assertTrue(any(command == "/agents monitor" for command, _detail in agent_monitor_matches))
+        agent_status_matches = slash_palette_candidates("/agents sta")
+        self.assertTrue(any(command == "/agents status" for command, _detail in agent_status_matches))
 
     def test_interactive_dispatch_runs_local_agent_turn(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -438,6 +442,7 @@ class TuiRendererTests(unittest.TestCase):
                 "/agents bg <task> | use-artifact <id> | approve",
                 "/agents jobs",
                 "/agents monitor <job-id>",
+                "/agents status <root-id>",
                 "/agents unwatch",
                 "/agents recover",
                 "browser_auto_launch=false",
@@ -2103,6 +2108,36 @@ class TuiRendererTests(unittest.TestCase):
             self.assertEqual(result, "subagents")
             self.assertIn("SUBAGENT TIMELINE", timeline.getvalue())
             self.assertIn("worker.started", timeline.getvalue())
+
+            status = io.StringIO()
+            with contextlib.redirect_stdout(status):
+                result = dispatch_interactive_command(f"/subagents status {root_id}", paths)
+
+            self.assertEqual(result, "subagents")
+            self.assertIn("SUBAGENT RUN STATUS", status.getvalue())
+            self.assertIn("progress  workers=4/4", status.getvalue())
+            self.assertIn("receipt   ", status.getvalue())
+
+            agent_status = io.StringIO()
+            with contextlib.redirect_stdout(agent_status):
+                result = dispatch_interactive_command(f"/agents status {root_id}", paths)
+
+            self.assertEqual(result, "agents")
+            self.assertIn("AGENT RUN STATUS", agent_status.getvalue())
+            self.assertIn("recent events", agent_status.getvalue())
+            self.assertIn("receipt   ", agent_status.getvalue())
+            audit_rows = [json.loads(line) for line in (paths.state_dir / "audit.jsonl").read_text(encoding="utf-8").splitlines() if line.strip()]
+            status_receipts = [row for row in audit_rows if row["event_type"] == "subagent.run_status.read"]
+            self.assertEqual(len(status_receipts), 2)
+            for receipt in status_receipts:
+                self.assertEqual(receipt["payload"]["root_id"], root_id)
+                self.assertEqual(receipt["payload"]["phase"], "completed")
+                self.assertEqual(receipt["payload"]["status"], "completed")
+                self.assertEqual(receipt["payload"]["worker_count"], 4)
+                self.assertGreater(receipt["payload"]["event_count"], 0)
+                self.assertFalse(receipt["payload"]["browser_auto_launch"])
+                self.assertFalse(receipt["payload"]["external_action_started"])
+                self.assertFalse(receipt["payload"]["raw_secret_values_included"])
 
     def test_interactive_dispatch_live_subagents_static_fallback(self):
         with tempfile.TemporaryDirectory() as tmp:

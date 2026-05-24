@@ -20,7 +20,7 @@ from aegisagent.core.provider_config import ProviderUsageStore
 from aegisagent.core.sessions import SessionStore
 from aegisagent.models import utc_now
 from aegisagent.security.audit import AuditLog
-from aegisagent.security.redaction import redact_text
+from aegisagent.security.redaction import redact_mapping, redact_text
 
 
 @dataclass(frozen=True)
@@ -229,6 +229,12 @@ def agent_status(paths: RuntimePaths, *, limits: SubagentLimits | None = None) -
             f"{command} agents contracts",
             f"{command} agents delegate <task>",
             f"{command} agents background <task>",
+            f"{command} agents jobs",
+            f"{command} agents monitor <job-id>",
+            f"{command} agents job <job-id>",
+            f"{command} agents status <root-id>",
+            f"{command} agents cancel <job-id>",
+            f"{command} agents recover",
             f"{command} agents synthesis <root-id>",
             f"{command} agents graph <root-id>",
             f"{command} agents artifacts",
@@ -238,6 +244,12 @@ def agent_status(paths: RuntimePaths, *, limits: SubagentLimits | None = None) -
             "/agents profiles",
             "/agents contracts",
             "/agents delegate <task>",
+            "/agents jobs",
+            "/agents monitor <job-id>",
+            "/agents job <job-id>",
+            "/agents status <root-id>",
+            "/agents cancel <job-id>",
+            "/agents recover",
             "/agents synthesis <root-id>",
             "/agents graph <root-id>",
             "/agents bg <task>",
@@ -755,6 +767,7 @@ class LocalSubagentOrchestrator:
         reuse_approved: bool = False,
         requested_depth: int = 1,
         event_sink: Callable[[SubagentEvent], None] | None = None,
+        root_started: Callable[[SubagentRecord], None] | None = None,
     ) -> SubagentDelegationResult:
         requested_depth = _validate_requested_depth(requested_depth, self.limits)
         reusable_ids = _normalize_reusable_artifact_ids(reusable_artifact_ids)
@@ -771,6 +784,8 @@ class LocalSubagentOrchestrator:
         root.status = "running"
         self.sessions.append(root.session_id, "user", task, metadata={"source": "subagent", "role": root.role, "parent_session_id": parent_session_id, "reused_artifact_ids": [artifact["id"] for artifact in reused_artifacts], "artifact_reuse_approved": bool(reused_artifacts)})
         self.store.save(root)
+        if root_started:
+            root_started(root)
         self.audit.append(
             "subagent.delegation.started",
             {
@@ -1162,6 +1177,53 @@ class LocalSubagentOrchestrator:
             "raw_secret_values_included": False,
         }
 
+    def run_status(self, root_id: str, *, limit: int = 12) -> dict[str, Any]:
+        root = self.store.get(root_id)
+        workers = _descendant_records(self.store, root.id)
+        events = self.store.events(root.id, limit=limit)
+        worker_status_counts: dict[str, int] = {}
+        for worker in workers:
+            worker_status_counts[worker.status] = worker_status_counts.get(worker.status, 0) + 1
+        completed_workers = worker_status_counts.get("completed", 0)
+        expected_workers = max(4, len(workers))
+        generated_artifacts = [artifact for worker in workers for artifact in worker.artifacts]
+        if root.artifacts:
+            generated_artifacts.extend(root.artifacts)
+        synthesis_status = str(root.final_synthesis.get("status") or "")
+        phase = _run_phase(root, workers)
+        command = terminal_command_name()
+        return {
+            "title": "SUBAGENT RUN STATUS",
+            "root_id": root.id,
+            "task": redact_text(root.task).text,
+            "phase": phase,
+            "status": root.status,
+            "requested_depth": max([root.depth, *(worker.depth for worker in workers)], default=root.depth) or 1,
+            "nested_worker_count": sum(1 for worker in workers if worker.parent_id and worker.parent_id != root.id),
+            "workers_expected": expected_workers,
+            "workers_total": len(workers),
+            "workers_completed": completed_workers,
+            "workers_running": worker_status_counts.get("running", 0),
+            "workers_failed": worker_status_counts.get("failed", 0),
+            "workers_stopped": worker_status_counts.get("stopped", 0),
+            "worker_status_counts": worker_status_counts,
+            "workers": [_redacted_mapping(worker.to_dict()) for worker in workers],
+            "artifact_count": len(generated_artifacts),
+            "synthesis_status": synthesis_status,
+            "synthesis_artifact_id": str(root.final_synthesis.get("artifact_id") or ""),
+            "event_count": len(self.store.events(root.id, limit=10_000)),
+            "recent_events": [_redacted_mapping(event.to_dict()) for event in events],
+            "terminal_first": True,
+            "browser_auto_launch": False,
+            "external_action_started": False,
+            "raw_secret_values_included": False,
+            "next": [
+                f"{command} agents status {root.id}",
+                f"{command} agents synthesis {root.id}",
+                f"{command} agents graph {root.id}",
+            ],
+        }
+
     def start_background(
         self,
         task: str,
@@ -1238,6 +1300,24 @@ class LocalSubagentOrchestrator:
         record.started_at = record.started_at or utc_now()
         jobs.save(record)
         try:
+            def bind_root(started_root: SubagentRecord) -> None:
+                current = jobs.get(job_id)
+                current.root_id = started_root.id
+                current.status = "running"
+                current.started_at = current.started_at or utc_now()
+                jobs.save(current)
+                self.audit.append(
+                    "subagent.background.root_bound",
+                    {
+                        "job_id": current.id,
+                        "root_id": started_root.id,
+                        "requested_depth": current.requested_depth,
+                        "external_action_started": False,
+                        "browser_auto_launch": False,
+                        "raw_secret_values_included": False,
+                    },
+                )
+
             if os.environ.get("AEGISAGENT_BACKGROUND_SLEEP"):
                 time.sleep(float(os.environ["AEGISAGENT_BACKGROUND_SLEEP"]))
                 record = jobs.get(job_id)
@@ -1248,6 +1328,7 @@ class LocalSubagentOrchestrator:
                 reusable_artifact_ids=record.reusable_artifact_ids,
                 reuse_approved=record.artifact_reuse_approved,
                 requested_depth=record.requested_depth,
+                root_started=bind_root,
             )
             record.status = "completed"
             record.pid = None
@@ -1320,11 +1401,36 @@ class LocalSubagentOrchestrator:
             if record.status != "running" or not record.pid or _pid_alive(record.pid):
                 continue
             stale_pid = record.pid
+            if record.root_id:
+                try:
+                    root = self.store.get(record.root_id)
+                except KeyError:
+                    root = None
+                if root and root.status == "completed":
+                    record.status = "completed"
+                    record.pid = None
+                    record.summary = root.summary
+                    record.completed_at = utc_now()
+                    receipt = self.audit.append(
+                        "subagent.background.recovered_completed",
+                        {
+                            "job_id": record.id,
+                            "root_id": record.root_id,
+                            "pid": stale_pid,
+                            "external_action_started": False,
+                            "browser_auto_launch": False,
+                            "raw_secret_values_included": False,
+                        },
+                    )
+                    record.receipt_id = record.receipt_id or receipt["id"]
+                    jobs.save(record)
+                    recovered.append(record)
+                    continue
             record.status = "failed"
             record.pid = None
             record.summary = f"Detached subagent worker pid {stale_pid} is no longer running; job marked failed during recovery."
             record.completed_at = utc_now()
-            receipt = self.audit.append("subagent.background.recovered_stale", {"job_id": record.id, "pid": stale_pid, "external_action_started": False})
+            receipt = self.audit.append("subagent.background.recovered_stale", {"job_id": record.id, "root_id": record.root_id, "pid": stale_pid, "external_action_started": False})
             record.receipt_id = receipt["id"]
             jobs.save(record)
             recovered.append(record)
@@ -1570,6 +1676,43 @@ def format_background_jobs(records: list[dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
+def format_run_status(payload: dict[str, Any]) -> str:
+    lines = [
+        str(payload.get("title") or "SUBAGENT RUN STATUS"),
+        f"root      {payload.get('root_id', '')}  {payload.get('status', '')}",
+        f"phase     {payload.get('phase', '')}",
+        f"depth     requested={payload.get('requested_depth', 1)} nested_workers={payload.get('nested_worker_count', 0)}",
+        f"progress  workers={payload.get('workers_completed', 0)}/{payload.get('workers_expected', 4)} artifacts={payload.get('artifact_count', 0)} events={payload.get('event_count', 0)}",
+        f"synthesis {payload.get('synthesis_status', '') or '-'} {payload.get('synthesis_artifact_id', '')}",
+        f"task      {payload.get('task', '')}",
+        "terminal  first=true browser_auto_launch=false",
+    ]
+    if payload.get("receipt"):
+        lines.append(f"receipt   {payload.get('receipt', '')}")
+    lines.extend(["", "workers"])
+    workers = payload.get("workers", [])
+    if workers:
+        for worker in workers[:12]:
+            summary = str(worker.get("summary") or "").replace("\n", " ")
+            if len(summary) > 72:
+                summary = summary[:69] + "..."
+            lines.append(f"- {worker.get('role', ''):<11} {worker.get('id', ''):<11} {worker.get('status', ''):<10} depth={worker.get('depth', 0)} artifacts={len(worker.get('artifacts', []))} {summary}")
+    else:
+        lines.append("- none")
+    events = payload.get("recent_events", [])
+    lines.extend(["", "recent events"])
+    if events:
+        for event in events[-8:]:
+            lines.append(format_event_line(SubagentEvent.from_dict(event)))
+    else:
+        lines.append("- none")
+    next_steps = payload.get("next", [])
+    if next_steps:
+        lines.extend(["", "next"])
+        lines.extend(f"- {step}" for step in next_steps)
+    return "\n".join(lines)
+
+
 def format_artifacts(artifacts: list[dict[str, Any]]) -> str:
     if not artifacts:
         return "SUBAGENT ARTIFACTS\nNo durable subagent artifacts found. Use /agents delegate <task> to create role artifacts."
@@ -1627,6 +1770,47 @@ def format_events(events: list[SubagentEvent]) -> str:
 def format_event_line(event: SubagentEvent) -> str:
     role = event.role or "-"
     return f"{event.created_at:<21} {event.event:<18} {role:<12} {event.message}"
+
+
+def _redacted_mapping(payload: dict[str, Any]) -> dict[str, Any]:
+    clean, _redacted = redact_mapping(payload)
+    return clean
+
+
+def _descendant_records(store: SubagentStore, root_id: str) -> list[SubagentRecord]:
+    records_by_parent: dict[str, list[SubagentRecord]] = {}
+    for row in store.list(limit=10_000):
+        parent_id = str(row.get("parent_id") or "")
+        if not parent_id:
+            continue
+        records_by_parent.setdefault(parent_id, []).append(SubagentRecord.from_dict(row))
+    descendants: list[SubagentRecord] = []
+
+    def walk(parent_id: str) -> None:
+        for child in sorted(records_by_parent.get(parent_id, []), key=lambda item: (item.depth, item.role, item.created_at, item.id)):
+            descendants.append(child)
+            walk(child.id)
+
+    walk(root_id)
+    role_order = {"planner": 0, "researcher": 1, "implementer": 2, "reviewer": 3}
+    descendants.sort(key=lambda item: (item.depth, role_order.get(item.role, 99), item.created_at, item.id))
+    return descendants
+
+
+def _run_phase(root: SubagentRecord, workers: list[SubagentRecord]) -> str:
+    if root.status in {"stopped", "failed", "cancelled"}:
+        return root.status
+    if root.status == "completed" and root.final_synthesis.get("status") == "completed":
+        return "completed"
+    if any(worker.status == "failed" for worker in workers):
+        return "worker_failed"
+    if any(worker.status == "running" for worker in workers):
+        return "workers_running"
+    if workers:
+        return "synthesizing"
+    if root.status == "running":
+        return "coordinating"
+    return root.status or "queued"
 
 
 def _artifact_snippet(content: str, lowered_query: str) -> str:

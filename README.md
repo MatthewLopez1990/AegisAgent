@@ -16,7 +16,7 @@ design inputs, not the install target.
 
 ## Quick Start
 
-Copy and paste this on macOS or Linux:
+Step 1: install the `aegis` terminal command on macOS or Linux:
 
 ```bash
 /bin/sh -c "$(curl -fsSL https://raw.githubusercontent.com/MatthewLopez1990/AegisAgent/main/scripts/install.sh)"
@@ -28,21 +28,23 @@ If your shell cannot find `aegis` right away, run:
 export PATH="$HOME/.local/bin:$PATH"
 ```
 
-Verify:
+Step 2: verify the command:
 
 ```bash
 command -v aegis
 aegis health
 ```
 
-Use the built-in local model route with no account:
+Step 3: choose a model route.
+
+Use the built-in local route with no account:
 
 ```bash
 aegis model connect local
 aegis model doctor
 ```
 
-Or connect OpenAI with an environment-variable handle:
+Or connect OpenAI with one environment-variable handle:
 
 ```bash
 export OPENAI_API_KEY="..."
@@ -50,7 +52,7 @@ aegis model connect openai
 aegis model doctor
 ```
 
-Start Aegis:
+Step 4: start Aegis:
 
 ```bash
 aegis
@@ -261,6 +263,13 @@ aegis agents
 aegis agents contracts
 aegis agents delegate "review this workspace"
 aegis agents bg "compare implementation options"
+aegis agents jobs
+aegis agents monitor <job-id>
+aegis agents status <root-id>
+aegis agents synthesis <root-id>
+aegis agents graph <root-id>
+aegis agents cancel <job-id>
+aegis agents recover
 aegis agents artifacts
 aegis agents artifacts show <artifact-id>
 aegis agents artifacts search "Checkpoint plan"
@@ -268,6 +277,12 @@ aegis agents delegate "continue from this prior artifact" --use-artifact <artifa
 aegis agents bg "continue from this prior artifact" --use-artifact <artifact-id> --approved
 aegis model usage
 ```
+
+Use `delegate` when you want the run to finish before the command returns. Use
+`bg` when you want a durable background job, then `jobs`, `monitor <job-id>`,
+and `status <root-id>` to follow progress from the terminal. Monitor and status
+commands are plain text by default, `--json` when requested, and do not launch a
+browser.
 
 `aegis agents delegate` runs planner, researcher, implementer, and reviewer
 workers through the active provider route, records isolated sessions, scoped
@@ -330,6 +345,9 @@ aegis setup --run-checks      # run metadata-only readiness checks
 aegis model doctor            # check configured model route
 aegis tasks --submit "do work"
 aegis tasks --events <id>
+aegis agents bg "review this workspace"
+aegis agents monitor <job-id>
+aegis agents status <root-id>
 aegis memory search <query>
 aegis connectors outbox
 aegis agents artifacts

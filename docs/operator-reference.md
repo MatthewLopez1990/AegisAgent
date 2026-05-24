@@ -178,9 +178,14 @@ Root shortcuts do not create singular subcommand families; use `/tasks watch`,
 /agents
 /agents delegate <task>
 /agents delegate <task> | use-artifact <artifact-id> | approve
+/agents bg <task>
+/agents monitor <job-id>
+/agents status <root-id>
 /agents synthesis <root-id>
 /agents graph <root-id>
 /subagents bg <task>
+/subagents monitor <job-id>
+/subagents status <root-id>
 /automations
 /improve
 /read <path>
@@ -250,7 +255,13 @@ aegis agents contracts
 aegis agents delegate "review the current plan"
 aegis agents delegate "review the current plan" --depth 2
 aegis agents delegate "continue from artifact" --use-artifact <artifact-id> --approved
+aegis agents bg "review the current plan"
 aegis agents bg "continue from artifact" --depth 2 --use-artifact <artifact-id> --approved
+aegis agents jobs
+aegis agents monitor <job-id>
+aegis agents status <root-id>
+aegis agents cancel <job-id>
+aegis agents recover
 aegis agents artifacts
 aegis agents artifacts show <artifact-id>
 aegis agents artifacts search "final synthesis"
@@ -260,9 +271,15 @@ aegis subagents --delegate "review the current plan"
 aegis subagents --delegate "review the current plan" --depth 2
 aegis subagents --delegate "continue from artifact" --use-artifact <artifact-id> --approved
 aegis subagents --background "continue from artifact" --depth 2 --use-artifact <artifact-id> --approved
+aegis subagents --job <job-id>
+aegis subagents --status <root-id>
 aegis subagents --synthesis <root-id>
 aegis subagents --artifact-graph <root-id>
 ```
+
+`agents monitor <job-id>` is the terminal-readable background-job view. It
+shows the job record, root run status when available, the recent timeline, and
+next commands. Add `--json` when a script needs the raw job record.
 
 Completed delegations create a coordinator `final_synthesis` artifact that can
 be inspected through the same read-only artifact list/show/search commands or

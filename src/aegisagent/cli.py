@@ -50,6 +50,8 @@ from aegisagent.core.subagents import (
     format_background_job,
     format_background_jobs,
     format_event_line,
+    format_events,
+    format_run_status,
     format_synthesis,
 )
 from aegisagent.core.tasks import TaskRunner, format_task_outputs, format_task_worker_logs
@@ -63,6 +65,32 @@ from aegisagent.security.sandbox import detect_sandbox
 from aegisagent.tui.interactive import command_catalog_payload, render_command_lanes
 from aegisagent.tui.renderer import TuiState, render
 from aegisagent.tui.textual_app import run_textual_app
+
+
+def _format_agent_background_monitor(orchestrator: LocalSubagentOrchestrator, job_id: str) -> str:
+    record = orchestrator.background_job(job_id)
+    lines = [
+        format_background_job(record).replace("SUBAGENT BACKGROUND JOB", "AGENT BACKGROUND JOB", 1),
+    ]
+    if record.root_id:
+        run_status = orchestrator.run_status(record.root_id)
+        run_status["title"] = "AGENT RUN STATUS"
+        lines.extend(
+            [
+                "",
+                format_run_status(run_status),
+                "",
+                format_events(orchestrator.events(record.root_id)).replace("SUBAGENT TIMELINE", "AGENT TIMELINE", 1),
+                "",
+                "next",
+                f"- {terminal_command_name()} agents monitor {record.id}",
+                f"- {terminal_command_name()} agents status {record.root_id}",
+                f"- {terminal_command_name()} agents cancel {record.id}",
+            ]
+        )
+    else:
+        lines.extend(["", "AGENT TIMELINE", "No root id recorded yet. Run worker start or check jobs again in a moment."])
+    return "\n".join(lines)
 
 
 def _add_model_arguments(model_parser: argparse.ArgumentParser) -> None:
@@ -265,6 +293,7 @@ def build_parser() -> argparse.ArgumentParser:
     subagents.add_argument("--recover-stale", action="store_true", help="Mark running background subagent jobs failed when their worker pid is gone.")
     subagents.add_argument("--run-job", metavar="JOB_ID", help=argparse.SUPPRESS)
     subagents.add_argument("--stop", metavar="SUBAGENT_ID", help="Cascade stop a persisted subagent tree.")
+    subagents.add_argument("--status", metavar="ROOT_ID", help="Show durable run status for a root delegation id.")
     subagents.add_argument("--events", metavar="ROOT_ID", help="Show persisted subagent timeline events for a root id.")
     subagents.add_argument("--artifacts", action="store_true", help="List durable subagent role artifacts.")
     subagents.add_argument("--artifact", metavar="ARTIFACT_ID", help="Show one durable subagent role artifact.")
@@ -1179,6 +1208,14 @@ def main(argv: list[str] | None = None) -> int:
         elif args.stop:
             result = orchestrator.stop(args.stop)
             print(json.dumps(result.to_dict(), indent=2))
+        elif args.status:
+            try:
+                payload = orchestrator.run_status(args.status)
+            except KeyError as exc:
+                parser.error(str(exc))
+            receipt = audit.append("subagent.run_status.read", {"root_id": args.status, "phase": payload["phase"], "status": payload["status"], "worker_count": payload["workers_total"], "event_count": payload["event_count"], "browser_auto_launch": False, "external_action_started": False, "raw_secret_values_included": False})
+            payload["receipt"] = receipt["id"]
+            print(json.dumps(payload, indent=2) if args.json else format_run_status(payload))
         elif args.events:
             events = orchestrator.events(args.events)
             print(json.dumps({"root_id": args.events, "events": [event.to_dict() for event in events]}, indent=2))
@@ -1245,8 +1282,18 @@ def main(argv: list[str] | None = None) -> int:
         command = args.agent_command
         agent_args = " ".join(args.agent_args).strip()
         if command == "status":
-            payload = agent_status(paths)
-            print(json.dumps(payload, indent=2) if args.json else format_agent_status(payload))
+            if agent_args:
+                try:
+                    payload = orchestrator.run_status(agent_args)
+                except KeyError as exc:
+                    parser.error(str(exc))
+                receipt = audit.append("subagent.run_status.read", {"surface": "agents", "root_id": agent_args, "phase": payload["phase"], "status": payload["status"], "worker_count": payload["workers_total"], "event_count": payload["event_count"], "browser_auto_launch": False, "external_action_started": False, "raw_secret_values_included": False})
+                payload["receipt"] = receipt["id"]
+                text = format_run_status(payload).replace("SUBAGENT RUN STATUS", "AGENT RUN STATUS", 1)
+                print(json.dumps(payload, indent=2) if args.json else text)
+            else:
+                payload = agent_status(paths)
+                print(json.dumps(payload, indent=2) if args.json else format_agent_status(payload))
         elif command == "profiles":
             payload = {"profiles": agent_status(paths)["profiles"], "terminal_first": True, "browser_auto_launch": False}
             print(json.dumps(payload, indent=2) if args.json else format_agent_profiles())
@@ -1284,7 +1331,11 @@ def main(argv: list[str] | None = None) -> int:
         elif command in {"job", "monitor"}:
             if not agent_args:
                 parser.error(f"agents {command} requires a job id")
-            print(json.dumps(orchestrator.background_job(agent_args).to_dict(), indent=2))
+            record = orchestrator.background_job(agent_args)
+            if args.json or command == "job":
+                print(json.dumps(record.to_dict(), indent=2))
+            else:
+                print(_format_agent_background_monitor(orchestrator, agent_args))
         elif command == "cancel":
             if not agent_args:
                 parser.error("agents cancel requires a job id")

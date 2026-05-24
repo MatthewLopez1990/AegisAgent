@@ -22,6 +22,7 @@ from aegisagent.core.subagents import (
     format_artifact_search,
     format_artifacts,
     format_events,
+    format_run_status,
     format_stop,
     format_subagent_records,
 )
@@ -623,12 +624,33 @@ class MemorySkillsSubagentTests(unittest.TestCase):
 
             delegation = format_delegation(result)
             listing = format_subagent_records(SubagentStore(paths).list())
+            run_status = LocalSubagentOrchestrator(paths).run_status(result.root.id)
+            formatted_status = format_run_status(run_status)
 
             self.assertIn("SUBAGENT DELEGATION", delegation)
             self.assertIn("planner", delegation)
             self.assertNotIn('{"root"', delegation)
             self.assertIn("SUBAGENTS", listing)
             self.assertIn("coordinator", listing)
+            self.assertEqual(run_status["phase"], "completed")
+            self.assertEqual(run_status["workers_completed"], 4)
+            self.assertIn("SUBAGENT RUN STATUS", formatted_status)
+            self.assertIn("progress  workers=4/4", formatted_status)
+
+    def test_subagent_run_status_redacts_secret_task_payloads(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = runtime_paths(tmp)
+            raw_secret = "sk-testsecretvalue1234567890"
+            result = LocalSubagentOrchestrator(paths).delegate(f"inspect {raw_secret} without leaking")
+
+            run_status = LocalSubagentOrchestrator(paths).run_status(result.root.id)
+            formatted_status = format_run_status(run_status)
+            payload_text = json.dumps(run_status, sort_keys=True)
+
+            self.assertIn("[REDACTED]", formatted_status)
+            self.assertIn("[REDACTED]", payload_text)
+            self.assertNotIn(raw_secret, formatted_status)
+            self.assertNotIn(raw_secret, payload_text)
 
     def test_persisted_subagent_cascade_stop(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -740,6 +762,27 @@ class MemorySkillsSubagentTests(unittest.TestCase):
             self.assertEqual(orchestrator.background_job(job.id).status, "failed")
             receipt = AuditLog(paths).recent(1)[0]
             self.assertEqual(receipt["event_type"], "subagent.background.recovered_stale")
+
+    def test_background_job_recovery_promotes_completed_bound_root(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = runtime_paths(tmp)
+            result = LocalSubagentOrchestrator(paths).delegate("recover completed background root")
+            job = BackgroundJobStore(paths).create("recover completed background root")
+            job.status = "running"
+            job.pid = 99999999
+            job.root_id = result.root.id
+            BackgroundJobStore(paths).save(job)
+            orchestrator = LocalSubagentOrchestrator(paths)
+
+            recovered = orchestrator.recover_stale_background()
+
+            self.assertEqual([record.id for record in recovered], [job.id])
+            self.assertEqual(recovered[0].status, "completed")
+            self.assertIsNone(recovered[0].pid)
+            self.assertIn("model-backed local subagents completed", recovered[0].summary)
+            self.assertEqual(orchestrator.background_job(job.id).status, "completed")
+            receipt = AuditLog(paths).recent(1)[0]
+            self.assertEqual(receipt["event_type"], "subagent.background.recovered_completed")
 
 
 if __name__ == "__main__":
