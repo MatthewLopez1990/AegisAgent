@@ -213,6 +213,13 @@ Completed delegations create a coordinator `final_synthesis` artifact that can
 be inspected through the same read-only artifact list/show/search commands or
 through the root-scoped synthesis and graph commands.
 
+`aegis agents contracts` shows each worker role contract and structured budget
+policy. JSON output exposes the budget version, allowed tool groups, denied tool
+groups, limits, approval escalation, and receipt fields. These budgets narrow
+role intent and audit expectations, with artifact cap and safety checks recorded
+fail-closed; file, git, browser, connector, memory, and external-state mutations
+still require the existing typed approval path.
+
 ## Memory Review
 
 List/show/search/index are read-only. Add and delete require explicit approval.

@@ -16,36 +16,38 @@ design inputs, not the install target.
 
 ## Quick Start
 
-Install on macOS or Linux:
+Copy and paste this on macOS or Linux:
 
 ```bash
 /bin/sh -c "$(curl -fsSL https://raw.githubusercontent.com/MatthewLopez1990/AegisAgent/main/scripts/install.sh)"
 ```
 
-Make sure your shell can find the command:
+Then make sure your shell can find `aegis`:
 
 ```bash
 export PATH="$HOME/.local/bin:$PATH"
 command -v aegis
 ```
 
-Start the agent:
+Pick a model route. Local works with no account:
 
 ```bash
-aegis
+aegis model connect local
+aegis model doctor
 ```
 
-Optional: connect OpenAI with one command after exporting your key:
+OpenAI is one environment variable plus one connect command:
 
 ```bash
 export OPENAI_API_KEY="..."
 aegis model connect openai
+aegis model doctor
 ```
 
-Update this installed checkout from GitHub later:
+Start the terminal agent:
 
 ```bash
-aegis update --approved
+aegis
 ```
 
 Inside the terminal UI, type a normal request:
@@ -62,6 +64,12 @@ Or type a slash command for a direct action:
 /setup next
 /agents delegate review this workspace
 /tasks submit draft a safe implementation plan
+```
+
+Update the installed copy from GitHub later:
+
+```bash
+aegis update --approved
 ```
 
 ## Install On macOS Or Linux
@@ -104,16 +112,17 @@ AEGIS_REPO_URL="https://github.com/MatthewLopez1990/AegisAgent.git"
 
 ## Connect A Model Route
 
-Aegis works immediately with the built-in local terminal provider. No account,
-browser login, or API key is required:
+Use one of these. Aegis stores the provider choice and an environment-variable
+name only; it does not store the raw key.
+
+Local route, no account:
 
 ```bash
 aegis model connect local
 aegis model doctor
 ```
 
-To use OpenAI, keep the key in your shell and let Aegis store only the
-environment-variable name:
+OpenAI route:
 
 ```bash
 export OPENAI_API_KEY="..."
@@ -250,6 +259,11 @@ Later-stage workers receive prior worker artifact summaries while preserving the
 same bounded role contracts and approval model. After the workers finish, the
 coordinator writes a final synthesis artifact over the generated and approved
 reused artifact graph so the delegation has one traceable final handoff.
+Each role contract includes structured tool budget policy fields for allowed and
+denied tool groups, max tool calls, max artifacts, edit/test/network flags, and
+external-delivery denial. These budgets are contract and audit controls; file,
+git, browser, connector, memory, and external-state mutations still go through
+the typed approval policy.
 
 Artifact browsing is read-only by default. `aegis agents artifacts` lists
 durable role artifacts, `show` reads redacted artifact content, and `search`
@@ -413,14 +427,14 @@ OpenAI-compatible model routing for chat and role workers, scoped model usage
 ledger rows, connector metadata with a redacted approval-bound outbox, memory
 review controls, passive skill trust metadata, and local agent/subagent
 orchestration with provider fallback metadata, durable role artifacts,
-artifact list/show/search, stage-to-stage handoff metadata, and
-approval-gated reuse of selected prior artifacts as bounded summary context, and
-coordinator final synthesis over artifact graphs.
+artifact list/show/search, structured role-specific tool budget policies,
+stage-to-stage handoff metadata, approval-gated reuse of selected prior artifacts
+as bounded summary context, and coordinator final synthesis over artifact
+graphs.
 
 Partial: web console parity, live connectors, self-improvement, richer browser
 automation, multi-provider fallback ordering, subscription bridge readiness,
-richer role-specific tool budgets, and higher-depth delegation controls.
+higher-depth delegation controls.
 
-Next: richer role-specific tool budgets, higher-depth delegation controls, live
-browser control behind explicit approval, broader integrations, signed skill
-trust, and packaged release flows.
+Next: higher-depth delegation controls, live browser control behind explicit
+approval, broader integrations, signed skill trust, and packaged release flows.

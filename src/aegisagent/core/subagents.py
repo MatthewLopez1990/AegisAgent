@@ -30,10 +30,10 @@ class SubagentLimits:
     max_children: int = 5
 
 
-AGENT_CONTRACT_VERSION = "2026-05-23.role-contracts.v1"
+AGENT_CONTRACT_VERSION = "2026-05-24.role-budgets.v2"
 
 
-AGENT_PROFILES: tuple[dict[str, str], ...] = (
+AGENT_PROFILES: tuple[dict[str, Any], ...] = (
     {
         "name": "planner",
         "role": "planner",
@@ -41,6 +41,20 @@ AGENT_PROFILES: tuple[dict[str, str], ...] = (
         "context_contract": "Use the user objective, PLAN.md, capability gaps, and existing progress notes; do not assume web/browser is primary.",
         "deliverable": "Checkpoint plan with acceptance evidence and risk gates.",
         "tool_budget": "read-only repo inspection plus one concise plan artifact",
+        "tool_budget_policy": {
+            "budget_type": "contract_metadata",
+            "budget_version": AGENT_CONTRACT_VERSION,
+            "max_tool_calls": 8,
+            "max_artifacts": 1,
+            "allowed_tool_groups": ["read", "search", "sessions", "memory", "audit"],
+            "denied_tool_groups": ["workspace_write", "git_write", "network_delivery", "browser_launch"],
+            "approval_escalation": "deny_disallowed_role_tools",
+            "receipt_fields": ["role", "budget_version", "allowed_tool_groups", "denied_tool_groups", "max_tool_calls", "max_artifacts"],
+            "may_edit": False,
+            "may_run_tests": False,
+            "may_access_network": False,
+            "external_delivery_allowed": False,
+        },
     },
     {
         "name": "researcher",
@@ -49,6 +63,20 @@ AGENT_PROFILES: tuple[dict[str, str], ...] = (
         "context_contract": "Compare current files with referenced Aegis/Hermes patterns and cite concrete local evidence.",
         "deliverable": "Evidence summary with applicable patterns, gaps, and files to inspect.",
         "tool_budget": "read-only search, file reads, and metadata-only external comparison",
+        "tool_budget_policy": {
+            "budget_type": "contract_metadata",
+            "budget_version": AGENT_CONTRACT_VERSION,
+            "max_tool_calls": 12,
+            "max_artifacts": 1,
+            "allowed_tool_groups": ["read", "search", "sessions", "memory", "audit", "metadata_fetch"],
+            "denied_tool_groups": ["workspace_write", "git_write", "network_delivery", "browser_launch"],
+            "approval_escalation": "deny_disallowed_role_tools",
+            "receipt_fields": ["role", "budget_version", "allowed_tool_groups", "denied_tool_groups", "max_tool_calls", "max_artifacts"],
+            "may_edit": False,
+            "may_run_tests": False,
+            "may_access_network": False,
+            "external_delivery_allowed": False,
+        },
     },
     {
         "name": "implementer",
@@ -57,6 +85,20 @@ AGENT_PROFILES: tuple[dict[str, str], ...] = (
         "context_contract": "Edit only the scoped subsystem after planner/researcher context; preserve approval and redaction behavior.",
         "deliverable": "Minimal patch plus targeted tests and docs updates.",
         "tool_budget": "workspace edits, focused tests, no external delivery",
+        "tool_budget_policy": {
+            "budget_type": "contract_metadata",
+            "budget_version": AGENT_CONTRACT_VERSION,
+            "max_tool_calls": 16,
+            "max_artifacts": 1,
+            "allowed_tool_groups": ["read", "search", "workspace_write", "tests", "audit"],
+            "denied_tool_groups": ["git_write", "network_delivery", "browser_launch"],
+            "approval_escalation": "approval_required_for_mutating_tools",
+            "receipt_fields": ["role", "budget_version", "allowed_tool_groups", "denied_tool_groups", "max_tool_calls", "max_artifacts"],
+            "may_edit": True,
+            "may_run_tests": True,
+            "may_access_network": False,
+            "external_delivery_allowed": False,
+        },
     },
     {
         "name": "reviewer",
@@ -65,11 +107,25 @@ AGENT_PROFILES: tuple[dict[str, str], ...] = (
         "context_contract": "Review current diff, tests, safety flags, and user objective before any completion claim.",
         "deliverable": "Finding list or explicit no-finding statement with residual risks.",
         "tool_budget": "read-only diff/test review and final verification commands",
+        "tool_budget_policy": {
+            "budget_type": "contract_metadata",
+            "budget_version": AGENT_CONTRACT_VERSION,
+            "max_tool_calls": 10,
+            "max_artifacts": 1,
+            "allowed_tool_groups": ["read", "search", "diff", "tests", "audit"],
+            "denied_tool_groups": ["workspace_write", "git_write", "network_delivery", "browser_launch"],
+            "approval_escalation": "deny_disallowed_role_tools",
+            "receipt_fields": ["role", "budget_version", "allowed_tool_groups", "denied_tool_groups", "max_tool_calls", "max_artifacts"],
+            "may_edit": False,
+            "may_run_tests": True,
+            "may_access_network": False,
+            "external_delivery_allowed": False,
+        },
     },
 )
 
 
-def _profile_for(role: str) -> dict[str, str]:
+def _profile_for(role: str) -> dict[str, Any]:
     for profile in AGENT_PROFILES:
         if profile["role"] == role or profile["name"] == role:
             return profile
@@ -83,7 +139,24 @@ def _profile_for(role: str) -> dict[str, str]:
     }
 
 
-def _profile_contract(role: str) -> dict[str, str]:
+def _default_tool_budget_policy(role: str) -> dict[str, Any]:
+    return {
+        "budget_type": "contract_metadata",
+        "budget_version": AGENT_CONTRACT_VERSION,
+        "max_tool_calls": 4,
+        "max_artifacts": 1,
+        "allowed_tool_groups": ["read", "search"],
+        "denied_tool_groups": ["workspace_write", "git_write", "network_delivery", "browser_launch"],
+        "approval_escalation": "deny_disallowed_role_tools",
+        "receipt_fields": ["role", "budget_version", "allowed_tool_groups", "denied_tool_groups", "max_tool_calls", "max_artifacts"],
+        "may_edit": False,
+        "may_run_tests": False,
+        "may_access_network": False,
+        "external_delivery_allowed": False,
+    }
+
+
+def _profile_contract(role: str) -> dict[str, Any]:
     profile = _profile_for(role)
     return {
         "role": profile["role"],
@@ -91,6 +164,7 @@ def _profile_contract(role: str) -> dict[str, str]:
         "context_contract": profile["context_contract"],
         "deliverable": profile["deliverable"],
         "tool_budget": profile["tool_budget"],
+        "tool_budget_policy": dict(profile.get("tool_budget_policy") or _default_tool_budget_policy(role)),
     }
 
 
@@ -143,6 +217,8 @@ def agent_status(paths: RuntimePaths, *, limits: SubagentLimits | None = None) -
             f"{command} agents contracts",
             f"{command} agents delegate <task>",
             f"{command} agents background <task>",
+            f"{command} agents synthesis <root-id>",
+            f"{command} agents graph <root-id>",
             f"{command} agents artifacts",
             f"{command} agents artifacts show <artifact-id>",
             f"{command} agents artifacts search <query>",
@@ -150,6 +226,8 @@ def agent_status(paths: RuntimePaths, *, limits: SubagentLimits | None = None) -
             "/agents profiles",
             "/agents contracts",
             "/agents delegate <task>",
+            "/agents synthesis <root-id>",
+            "/agents graph <root-id>",
             "/agents bg <task>",
             "/agents artifacts",
             "/agents artifacts show <artifact-id>",
@@ -744,6 +822,7 @@ class LocalSubagentOrchestrator:
                             "context_contract": contract["context_contract"],
                             "deliverable": contract["deliverable"],
                             "tool_budget": contract["tool_budget"],
+                            "tool_budget_policy": contract["tool_budget_policy"],
                             "stage": stage_index,
                             "input_artifacts": worker.input_artifacts,
                             "input_artifact_count": len(worker.input_artifacts),
@@ -778,6 +857,9 @@ class LocalSubagentOrchestrator:
                 child.primary_provider = worker_result.primary_provider
                 child.input_artifacts = list(worker_result.input_artifacts)
                 child.artifacts = [_artifact_for_worker(self.paths, root.id, child, worker_result.input_artifacts)]
+                contract = _profile_contract(child.role)
+                budget_policy = contract["tool_budget_policy"]
+                _assert_worker_budget_contract(child, budget_policy)
                 child.status = "completed"
                 worker_receipt = self.audit.append(
                     "subagent.worker.completed",
@@ -787,7 +869,10 @@ class LocalSubagentOrchestrator:
                         "role": child.role,
                         "status": child.status,
                         "contract_version": AGENT_CONTRACT_VERSION,
-                        "deliverable": _profile_contract(child.role)["deliverable"],
+                        "deliverable": contract["deliverable"],
+                        "tool_budget_policy": budget_policy,
+                        "tool_budget_contract_checked": True,
+                        "tool_budget_enforcement_scope": "artifact_cap_and_safety_flags",
                         "input_artifacts": child.input_artifacts,
                         "artifact_ids": [artifact["id"] for artifact in child.artifacts],
                         "artifact_count": len(child.artifacts),
@@ -1214,6 +1299,7 @@ def format_agent_status(payload: dict[str, Any]) -> str:
     ]
     for profile in payload["profiles"]:
         lines.append(f"- {profile['name']:<12} {profile['purpose']}")
+    lines.extend(["", *_role_budget_matrix(payload["profiles"])])
     lines.extend(["", "try", "- /agents contracts", "- /agents delegate improve terminal orchestration", "- /agents bg compare current TUI against prior Aegis-Agent"])
     return "\n".join(lines)
 
@@ -1224,7 +1310,31 @@ def format_agent_profiles() -> str:
         lines.append(f"{profile['name']:<12} {profile['purpose']}")
         lines.append(f"{'':<12} deliverable: {profile['deliverable']}")
         lines.append(f"{'':<12} budget: {profile['tool_budget']}")
+        budget = profile.get("tool_budget_policy") if isinstance(profile.get("tool_budget_policy"), dict) else {}
+        allowed = ", ".join(budget.get("allowed_tool_groups", []))
+        denied = ", ".join(budget.get("denied_tool_groups", []))
+        lines.append(f"{'':<12} max tools: {budget.get('max_tool_calls', 0)} / artifacts: {budget.get('max_artifacts', 0)}")
+        lines.append(f"{'':<12} allowed: {allowed}")
+        lines.append(f"{'':<12} denied: {denied}")
     return "\n".join(lines)
+
+
+def _role_budget_matrix(profiles: list[dict[str, Any]] | tuple[dict[str, Any], ...]) -> list[str]:
+    lines = ["role budgets", "role         calls artifacts edit tests network delivery"]
+    for profile in profiles:
+        budget = profile.get("tool_budget_policy") if isinstance(profile.get("tool_budget_policy"), dict) else {}
+        lines.append(
+            f"{profile.get('role', profile.get('name', '')):<12} "
+            f"{str(budget.get('max_tool_calls', 0)):<5} "
+            f"{str(budget.get('max_artifacts', 0)):<9} "
+            f"{'yes' if budget.get('may_edit') else 'no':<4} "
+            f"{'yes' if budget.get('may_run_tests') else 'no':<5} "
+            f"{'yes' if budget.get('may_access_network') else 'no':<7} "
+            f"{'yes' if budget.get('external_delivery_allowed') else 'no'}"
+        )
+    lines.append("")
+    lines.append("run: /agents contracts for allowed/denied tool groups")
+    return lines
 
 
 def format_agent_contracts(payload: dict[str, Any]) -> str:
@@ -1244,6 +1354,10 @@ def format_agent_contracts(payload: dict[str, Any]) -> str:
                 f"context    {profile['context_contract']}",
                 f"deliver    {profile['deliverable']}",
                 f"budget     {profile['tool_budget']}",
+                f"tool caps  calls={profile['tool_budget_policy']['max_tool_calls']} artifacts={profile['tool_budget_policy']['max_artifacts']} edit={str(profile['tool_budget_policy']['may_edit']).lower()} tests={str(profile['tool_budget_policy']['may_run_tests']).lower()} network={str(profile['tool_budget_policy']['may_access_network']).lower()} delivery={str(profile['tool_budget_policy']['external_delivery_allowed']).lower()}",
+                f"allow      {', '.join(profile['tool_budget_policy']['allowed_tool_groups'])}",
+                f"deny       {', '.join(profile['tool_budget_policy']['denied_tool_groups'])}",
+                f"escalate   {profile['tool_budget_policy']['approval_escalation']}",
                 "",
             ]
         )
@@ -1395,12 +1509,17 @@ def _pid_alive(pid: int) -> bool:
 
 def _role_prompt(role: str, task: str, prior_artifacts: list[dict[str, Any]] | None = None) -> str:
     contract = _profile_contract(role)
+    budget = contract["tool_budget_policy"]
     return (
         f"You are the {role} subagent.\n"
         f"Purpose: {contract['purpose']}\n"
         f"Context contract: {contract['context_contract']}\n"
         f"Deliverable: {contract['deliverable']}\n"
         f"Tool budget: {contract['tool_budget']}\n"
+        f"Structured tool budget: max_tool_calls={budget['max_tool_calls']}; max_artifacts={budget['max_artifacts']}; "
+        f"allowed={', '.join(budget['allowed_tool_groups'])}; denied={', '.join(budget['denied_tool_groups'])}; "
+        f"may_edit={str(budget['may_edit']).lower()}; may_run_tests={str(budget['may_run_tests']).lower()}; "
+        f"may_access_network={str(budget['may_access_network']).lower()}; external_delivery_allowed={str(budget['external_delivery_allowed']).lower()}.\n"
         f"Work locally and produce a concise contribution for: {task}"
     )
 
@@ -1573,6 +1692,19 @@ def _synthesis_artifact_for_root(
         "external_action_started": False,
         "raw_secret_values_included": False,
     }
+
+
+def _assert_worker_budget_contract(worker: SubagentRecord, budget_policy: dict[str, Any]) -> None:
+    max_artifacts = int(budget_policy.get("max_artifacts") or 0)
+    if max_artifacts >= 0 and len(worker.artifacts) > max_artifacts:
+        raise ValueError(f"{worker.role} exceeded tool budget artifact cap")
+    for artifact in worker.artifacts:
+        if artifact.get("external_action_started"):
+            raise ValueError(f"{worker.role} exceeded tool budget external action boundary")
+        if artifact.get("browser_auto_launch"):
+            raise ValueError(f"{worker.role} exceeded tool budget browser boundary")
+        if artifact.get("raw_secret_values_included"):
+            raise ValueError(f"{worker.role} exceeded tool budget secret boundary")
 
 
 def _artifact_graph(artifacts: list[dict[str, Any]], *, reused_artifacts: list[dict[str, Any]]) -> dict[str, list[dict[str, str]]]:

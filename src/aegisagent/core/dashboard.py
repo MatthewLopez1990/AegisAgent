@@ -95,6 +95,8 @@ def dashboard_payload(paths: RuntimePaths) -> dict[str, Any]:
         "agents": {
             "contract_version": contracts["contract_version"],
             "profiles": [profile["role"] for profile in contracts["profiles"]],
+            "budget_posture": "structured_contract_metadata",
+            "role_budget_calls": {profile["role"]: profile["tool_budget_policy"]["max_tool_calls"] for profile in contracts["profiles"]},
             "limits": contracts["limits"],
         },
         "next": [
@@ -131,7 +133,7 @@ def format_dashboard(payload: dict[str, Any]) -> str:
         f"- sandbox    {sandbox['backend']} host_approval={str(sandbox['host_execution_requires_approval']).lower()}",
         f"- tools      {tools['enabled']} enabled / {tools['ask']} ask / {tools['blocked']} blocked",
         f"- work       tasks={runtime['tasks']} automations={runtime['automations']} improvements={runtime['improvements']}",
-        f"- agents     subagents={runtime['subagents']} jobs={runtime['agent_jobs']} contracts={agents['contract_version']}",
+        f"- agents     subagents={runtime['subagents']} jobs={runtime['agent_jobs']} contracts={agents['contract_version']} budgets={agents['budget_posture']}",
         f"- sessions   transcripts={runtime['sessions']} browser_sessions={runtime['browser_sessions']}",
         "",
         "routes",

@@ -36,6 +36,8 @@ class TuiRendererTests(unittest.TestCase):
         self.assertIn("Next: /setup next -> /setup run-checks -> /setup first-task", output)
         self.assertIn("Web stays optional and off until explicitly approved.", output)
         self.assertIn("provider   local fallback", output)
+        self.assertIn("budgets    planner=8 researcher=12", output)
+        self.assertIn("implementer=16 reviewer=10", output)
         self.assertIn("approval   none pending", output)
         self.assertIn("Enter send | / commands | Tab complete", output)
         self.assertIn("120x40 ready", output)
@@ -1486,6 +1488,7 @@ class TuiRendererTests(unittest.TestCase):
             self.assertIn("AGENT PROFILES", profiles.getvalue())
             self.assertIn("reviewer", profiles.getvalue())
             self.assertIn("deliverable:", profiles.getvalue())
+            self.assertIn("max tools:", profiles.getvalue())
 
             contracts = io.StringIO()
             with contextlib.redirect_stdout(contracts):
@@ -1494,6 +1497,13 @@ class TuiRendererTests(unittest.TestCase):
             self.assertEqual(result, "agents")
             self.assertIn("AGENT CONTRACTS", contracts.getvalue())
             self.assertIn("context", contracts.getvalue())
+            self.assertIn("tool caps", contracts.getvalue())
+            self.assertIn("tool caps  calls=8 artifacts=1 edit=false tests=false network=false delivery=false", contracts.getvalue())
+            self.assertIn("tool caps  calls=16 artifacts=1 edit=true tests=true network=false delivery=false", contracts.getvalue())
+            self.assertIn("allow      read, search, workspace_write, tests, audit", contracts.getvalue())
+            self.assertIn("deny", contracts.getvalue())
+            self.assertIn("deny       workspace_write, git_write, network_delivery, browser_launch", contracts.getvalue())
+            self.assertNotIn("sandbox enforced", contracts.getvalue().lower())
             self.assertIn("browser_auto_launch=false", contracts.getvalue())
 
             delegated = io.StringIO()

@@ -133,6 +133,8 @@ def _posture_panel(width: int, height: int) -> list[str]:
         _panel_line("provider   local fallback; run /model doctor", width),
         _blank_panel(width),
         _panel_line("tools      shell, git, files gated", width),
+        _panel_line("budgets    planner=8 researcher=12", width),
+        _panel_line("           implementer=16 reviewer=10", width),
         _blank_panel(width),
         _panel_line("workspace  current folder scoped", width),
         _blank_panel(width),

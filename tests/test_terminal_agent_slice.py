@@ -488,6 +488,15 @@ class TerminalAgentSessionTests(unittest.TestCase):
             self.assertEqual(len(tool["metadata"]["worker_input_artifacts_by_role"]["reviewer"]), 3)
             receipts = AuditLog(paths).recent(3)
             self.assertTrue(any(receipt["event_type"] == "subagent.delegation.completed" for receipt in receipts))
+            delegation_receipt = next(receipt for receipt in receipts if receipt["event_type"] == "subagent.delegation.completed")
+            contracts_by_role = {contract["role"]: contract for contract in delegation_receipt["payload"]["worker_contracts"]}
+            self.assertEqual(
+                {role: contract["tool_budget_policy"]["max_tool_calls"] for role, contract in contracts_by_role.items()},
+                {"planner": 8, "researcher": 12, "implementer": 16, "reviewer": 10},
+            )
+            self.assertFalse(contracts_by_role["planner"]["tool_budget_policy"]["may_edit"])
+            self.assertTrue(contracts_by_role["implementer"]["tool_budget_policy"]["may_edit"])
+            self.assertTrue(contracts_by_role["reviewer"]["tool_budget_policy"]["may_run_tests"])
             turn = next(receipt for receipt in receipts if receipt["event_type"] == "agent.turn.completed")
             self.assertEqual(turn["payload"]["delegated_worker_count"], 4)
             self.assertEqual(turn["payload"]["delegated_worker_providers"], ["local/terminal-v0"])

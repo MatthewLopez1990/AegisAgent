@@ -89,6 +89,8 @@ class CliTests(unittest.TestCase):
         self.assertLess(install_text.index("require_python_version"), install_text.index("git clone --branch"))
         self.assertIn('"$PYTHON" -m aegisagent install shim --approved', install_text)
         self.assertIn("$COMMAND_NAME model connect local", install_text)
+        self.assertIn("export OPENAI_API_KEY", install_text)
+        self.assertIn("$COMMAND_NAME model connect openai", install_text)
         self.assertIn("git -C \"$INSTALL_DIR\" pull --ff-only origin \"$BRANCH\"", update_text)
         self.assertIn("remote get-url origin", update_text)
         self.assertIn("status --porcelain", update_text)
@@ -229,6 +231,7 @@ class CliTests(unittest.TestCase):
             self.assertEqual(install.returncode, 0, install.stderr)
             self.assertIn("AegisAgent installed.", install.stdout)
             self.assertIn("aegis model connect local", install.stdout)
+            self.assertIn("aegis model connect openai", install.stdout)
             command_lookup = subprocess.run(["sh", "-c", "command -v aegis"], text=True, capture_output=True, check=False, env=env)
             self.assertEqual(command_lookup.returncode, 0, command_lookup.stderr)
             self.assertEqual(Path(command_lookup.stdout.strip()).resolve(), (bin_dir / "aegis").resolve())
@@ -2113,12 +2116,35 @@ class CliTests(unittest.TestCase):
             self.assertIn("AGENT PROFILES", profiles.stdout)
             self.assertIn("reviewer", profiles.stdout)
             self.assertIn("deliverable:", profiles.stdout)
+            self.assertIn("max tools:", profiles.stdout)
+            self.assertIn("allowed:", profiles.stdout)
+            self.assertIn("denied:", profiles.stdout)
 
             contracts = run_cli("agents", "contracts", cwd=tmp)
             self.assertEqual(contracts.returncode, 0, contracts.stderr)
             self.assertIn("AGENT CONTRACTS", contracts.stdout)
             self.assertIn("context", contracts.stdout)
+            self.assertIn("tool caps", contracts.stdout)
+            self.assertIn("tool caps  calls=8 artifacts=1 edit=false tests=false network=false delivery=false", contracts.stdout)
+            self.assertIn("tool caps  calls=16 artifacts=1 edit=true tests=true network=false delivery=false", contracts.stdout)
+            self.assertIn("allow", contracts.stdout)
+            self.assertIn("deny", contracts.stdout)
+            self.assertNotIn("sandbox enforced", contracts.stdout.lower())
             self.assertIn("browser_auto_launch=false", contracts.stdout)
+            contracts_json = run_cli("--json", "agents", "contracts", cwd=tmp)
+            self.assertEqual(contracts_json.returncode, 0, contracts_json.stderr)
+            contracts_by_role = {profile["role"]: profile for profile in json.loads(contracts_json.stdout)["profiles"]}
+            planner_contract = contracts_by_role["planner"]
+            implementer_contract = contracts_by_role["implementer"]
+            self.assertEqual(planner_contract["tool_budget_policy"]["budget_type"], "contract_metadata")
+            self.assertEqual(
+                {role: contract["tool_budget_policy"]["max_tool_calls"] for role, contract in contracts_by_role.items()},
+                {"planner": 8, "researcher": 12, "implementer": 16, "reviewer": 10},
+            )
+            self.assertFalse(planner_contract["tool_budget_policy"]["may_edit"])
+            self.assertFalse(contracts_by_role["researcher"]["tool_budget_policy"]["may_access_network"])
+            self.assertTrue(implementer_contract["tool_budget_policy"]["may_edit"])
+            self.assertTrue(contracts_by_role["reviewer"]["tool_budget_policy"]["may_run_tests"])
 
             delegated = run_cli("agents", "delegate", "improve terminal orchestration", cwd=tmp)
             self.assertEqual(delegated.returncode, 0, delegated.stderr)
@@ -2202,6 +2228,7 @@ class CliTests(unittest.TestCase):
             self.assertIn("activate    aegis-test tui", status.stdout)
             self.assertIn("browser_auto_launch=false", status.stdout)
             self.assertIn("gateway_started=false", status.stdout)
+            self.assertIn("budgets=structured_contract_metadata", status.stdout)
             self.assertIn("Agents and subagents", status.stdout)
 
             payload_result = run_cli("--json", "dashboard", cwd=tmp, extra_env={"AEGIS_COMMAND_NAME": "aegis-test"})
@@ -2214,6 +2241,8 @@ class CliTests(unittest.TestCase):
             self.assertTrue(payload["metadata_only"])
             self.assertEqual(payload["activation"]["primary_command"], "aegis-test tui")
             self.assertIn("contract_version", payload["agents"])
+            self.assertEqual(payload["agents"]["budget_posture"], "structured_contract_metadata")
+            self.assertEqual(payload["agents"]["role_budget_calls"]["planner"], 8)
 
     def test_automations_are_durable_gated_records(self):
         with tempfile.TemporaryDirectory() as tmp:
