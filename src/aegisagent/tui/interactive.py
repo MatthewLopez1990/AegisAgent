@@ -178,6 +178,9 @@ SLASH_COMMANDS: tuple[tuple[str, str], ...] = (
     ("/models providers", "alias for model provider routes"),
     ("/connectors", "show connector readiness metadata"),
     ("/connectors doctor", "run metadata-only connector checks"),
+    ("/connectors draft", "draft a redacted outbound connector packet"),
+    ("/connectors send", "record an approved outbound connector packet"),
+    ("/connectors outbox", "show connector packet outbox"),
     ("/memory", "index and search local memory"),
     ("/memory search", "search local memory by query"),
     ("/memory index", "index curated memory files"),
@@ -332,6 +335,9 @@ COMMAND_MENU_GROUPS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
             ("/models providers", "alias for provider route readiness"),
             ("/connectors", "show connector readiness metadata"),
             ("/connectors doctor", "run metadata-only connector checks"),
+            ("/connectors draft <name> | <target> | <message>", "draft outbound connector packet"),
+            ("/connectors send <name> | <target> | <message> | approve", "approval-bound connector packet"),
+            ("/connectors outbox", "show approved/drafted connector packets"),
             ("/memory", "index and search local memory"),
             ("/memory search <query>", "search local memory by query"),
             ("/memory index", "index curated memory files"),
@@ -942,7 +948,7 @@ class _CursesAegisAgent:
             self.message = "No slash command matches."
             return
         command = palette[min(self.palette_index, len(palette) - 1)][0]
-        self.input_buffer = command + (" " if command in {"/policy shell", "/read", "/git diff", "/git stage", "/git commit", "/git branch", "/git remote", "/edit replace", "/test", "/verify", "/sessions search", "/submit", "/add-dir", "/memory add", "/memory search", "/memory show", "/memory delete", "/web fetch", "/browser open", "/browser screenshot", "/tasks submit", "/tasks bg", "/tasks run", "/tasks start", "/tasks events", "/tasks output", "/tasks logs", "/tasks watch", "/tasks cancel", "/automations create", "/automations trigger", "/automations pause", "/automations resume", "/automations delete", "/improve propose", "/improve approve", "/improve implement", "/improve handoff", "/improve candidate", "/improve diff", "/improve verify", "/improve apply", "/improve evidence", "/improve complete", "/improve reject", "/subagents bg", "/subagents live", "/subagents monitor", "/subagents cancel", "/agents delegate", "/agents bg", "/agents live", "/agents monitor", "/agents cancel", "/q"} else "")
+        self.input_buffer = command + (" " if command in {"/policy shell", "/read", "/git diff", "/git stage", "/git commit", "/git branch", "/git remote", "/edit replace", "/test", "/verify", "/sessions search", "/submit", "/add-dir", "/memory add", "/memory search", "/memory show", "/memory delete", "/connectors draft", "/connectors send", "/web fetch", "/browser open", "/browser screenshot", "/tasks submit", "/tasks bg", "/tasks run", "/tasks start", "/tasks events", "/tasks output", "/tasks logs", "/tasks watch", "/tasks cancel", "/automations create", "/automations trigger", "/automations pause", "/automations resume", "/automations delete", "/improve propose", "/improve approve", "/improve implement", "/improve handoff", "/improve candidate", "/improve diff", "/improve verify", "/improve apply", "/improve evidence", "/improve complete", "/improve reject", "/subagents bg", "/subagents live", "/subagents monitor", "/subagents cancel", "/agents delegate", "/agents bg", "/agents live", "/agents monitor", "/agents cancel", "/q"} else "")
         self.cursor = len(self.input_buffer)
         self.message = f"Completed {command}; add args or press Enter."
 
@@ -1211,6 +1217,39 @@ def dispatch_interactive_command(command: str, paths: RuntimePaths) -> str:
     if command in {"/model", "/models", "/provider", "/model providers", "/models providers"} or command.startswith("/model providers") or command.startswith("/models providers"):
         print_json(ProviderStore(paths).summary())
         return "models"
+    if _slash_invoked(command, "/connectors draft"):
+        raw = _slash_remainder(command, "/connectors draft")
+        parts = [part.strip() for part in raw.split("|", 2)]
+        if len(parts) != 3 or not all(parts):
+            print("Usage: /connectors draft <name> | <target> | <message>")
+        else:
+            try:
+                print_json(ConnectorStore(paths).draft(parts[0], target=parts[1], message=parts[2], source="tui"))
+            except (KeyError, ValueError) as exc:
+                print_json({"status": "blocked", "reason": str(exc), "external_delivery_performed": False, "browser_auto_launch": False})
+        return "connectors"
+    if _slash_invoked(command, "/connectors send"):
+        raw = _slash_remainder(command, "/connectors send")
+        parts = [part.strip() for part in raw.split("|", 3)]
+        approved = len(parts) == 4 and parts[3].lower() in {"approve", "approved", "yes"}
+        if len(parts) < 3 or not all(parts[:3]):
+            print("Usage: /connectors send <name> | <target> | <message> | approve")
+        else:
+            try:
+                print_json(ConnectorStore(paths).send(parts[0], target=parts[1], message=parts[2], approved=approved, source="tui"))
+            except (KeyError, ValueError) as exc:
+                print_json({"status": "blocked", "reason": str(exc), "external_delivery_performed": False, "browser_auto_launch": False})
+        return "connectors"
+    if _slash_invoked(command, "/connectors outbox"):
+        print_json(
+            {
+                "outbox": ConnectorStore(paths).outbox(limit=20),
+                "external_action_started": False,
+                "external_delivery_performed": False,
+                "browser_auto_launch": False,
+            }
+        )
+        return "connectors"
     if command in {"/connectors doctor", "/connector doctor"} or command.startswith("/connectors doctor"):
         print_json(ConnectorStore(paths).doctor())
         return "connectors"

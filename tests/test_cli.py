@@ -1625,6 +1625,66 @@ class CliTests(unittest.TestCase):
             self.assertIn("connector.configured", audit)
             self.assertIn("connector.doctor", audit)
 
+    def test_connector_outbound_packets_are_approval_bound_and_redacted(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            raw_secret = "sk-abcdefghijklmnopqrstuvwxyz123456"
+            drafted = run_cli("connectors", "draft", "slack", "--target", "#ops", "--message", f"hello token={raw_secret}", cwd=tmp)
+            self.assertEqual(drafted.returncode, 0, drafted.stderr)
+            draft_payload = json.loads(drafted.stdout)
+            self.assertEqual(draft_payload["status"], "drafted")
+            self.assertEqual(draft_payload["envelope"]["message"], "hello token=[REDACTED]")
+            self.assertFalse(draft_payload["envelope"]["external_delivery_performed"])
+            self.assertNotIn(raw_secret, drafted.stdout)
+
+            preview = run_cli("connectors", "send", "slack", "--target", "#ops", "--message", "hello", cwd=tmp)
+            self.assertEqual(preview.returncode, 1)
+            self.assertEqual(json.loads(preview.stdout)["status"], "needs_approval")
+
+            blocked = run_cli("connectors", "send", "slack", "--target", "#ops", "--message", "hello", "--approved", cwd=tmp)
+            self.assertEqual(blocked.returncode, 1)
+            self.assertEqual(json.loads(blocked.stdout)["status"], "blocked")
+
+            configured = run_cli("connectors", "configure", "slack", "--token-env", "AEGIS_TEST_SLACK_TOKEN", "--enable", cwd=tmp)
+            self.assertEqual(configured.returncode, 0, configured.stderr)
+            approved = run_cli(
+                "connectors",
+                "send",
+                "slack",
+                "--target",
+                "#ops",
+                "--message",
+                "hello",
+                "--approved",
+                cwd=tmp,
+                extra_env={"AEGIS_TEST_SLACK_TOKEN": "ready"},
+            )
+            self.assertEqual(approved.returncode, 0, approved.stderr)
+            approved_payload = json.loads(approved.stdout)
+            self.assertEqual(approved_payload["status"], "approved_pending_adapter")
+            self.assertTrue(approved_payload["envelope"]["approved"])
+            self.assertFalse(approved_payload["envelope"]["external_delivery_performed"])
+            self.assertFalse(approved_payload["envelope"]["browser_auto_launch"])
+
+            outbox = run_cli("connectors", "outbox", cwd=tmp)
+            self.assertEqual(outbox.returncode, 0, outbox.stderr)
+            outbox_payload = json.loads(outbox.stdout)
+            statuses = [item["status"] for item in outbox_payload["outbox"]]
+            self.assertIn("drafted", statuses)
+            self.assertIn("approved_pending_adapter", statuses)
+            self.assertFalse(outbox_payload["external_delivery_performed"])
+            self.assertNotIn(raw_secret, outbox.stdout)
+
+            unsupported = run_cli("connectors", "draft", "mcp", "--target", "server", "--message", "hello", cwd=tmp)
+            self.assertEqual(unsupported.returncode, 1)
+            self.assertEqual(json.loads(unsupported.stdout)["status"], "blocked")
+
+            audit = (Path(tmp) / ".aegisagent" / "audit.jsonl").read_text(encoding="utf-8")
+            self.assertIn("connector.delivery.drafted", audit)
+            self.assertIn("connector.delivery.needs_approval", audit)
+            self.assertIn("connector.delivery.approved_pending_adapter", audit)
+            self.assertIn('"external_delivery_performed": false', audit)
+            self.assertNotIn(raw_secret, audit)
+
     def test_tasks_submit_run_cancel(self):
         with tempfile.TemporaryDirectory() as tmp:
             submitted = run_cli("tasks", "--submit", "draft a safe plan", cwd=tmp)

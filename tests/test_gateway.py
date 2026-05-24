@@ -38,6 +38,17 @@ class GatewayTests(unittest.TestCase):
             self.assertFalse(doctor_payload["external_delivery_performed"])
             self.assertFalse(doctor_payload["browser_auto_launch"])
 
+            outbox = client.get("/connectors/outbox")
+            self.assertEqual(outbox.status_code, 200)
+            outbox_payload = outbox.json()
+            self.assertFalse(outbox_payload["external_delivery_performed"])
+            self.assertFalse(outbox_payload["browser_auto_launch"])
+            self.assertEqual(outbox_payload["outbox"], [])
+
+            for route in ("/connectors/draft", "/connectors/send"):
+                response = client.post(route, json={"connector": "slack", "target": "#ops", "message": "hello"})
+                self.assertEqual(response.status_code, 404, route)
+
             missing = client.get("/setup/nope")
             self.assertEqual(missing.status_code, 404)
 

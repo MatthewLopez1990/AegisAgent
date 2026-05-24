@@ -93,6 +93,17 @@ def app_factory(workspace: str | None = None) -> Any:
     def connector_doctor() -> dict:
         return connectors.doctor()
 
+    @app.get("/connectors/outbox")
+    def connector_outbox(limit: int = 20) -> dict:
+        return {
+            "outbox": connectors.outbox(limit=limit),
+            "terminal_first": True,
+            "browser_auto_launch": False,
+            "external_action_started": False,
+            "external_delivery_performed": False,
+            "metadata_only": True,
+        }
+
     @app.get("/model/providers")
     def model_providers() -> dict:
         return ProviderStore(paths).summary()

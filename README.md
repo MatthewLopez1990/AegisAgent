@@ -159,6 +159,9 @@ aegis task submit "do work"   # singular alias for task queue submit
 aegis tasks --events <id>     # canonical task timeline
 aegis memory search <query>   # search local memory
 aegis memory index            # index curated memory files
+aegis connectors draft slack --target "#ops" --message "status"
+aegis connectors send slack --target "#ops" --message "status" --approved
+aegis connectors outbox       # review drafted/approved connector packets
 aegis audit verify            # verify append-only audit hash chain
 aegis update --approved       # pull latest main from GitHub
 ```
@@ -232,6 +235,17 @@ Connector metadata follows the same pattern:
 export SLACK_BOT_TOKEN="..."
 aegis connectors configure slack --token-env SLACK_BOT_TOKEN --enable
 aegis connectors doctor
+```
+
+Connector delivery is not live yet. The terminal can draft redacted connector
+packets and record an explicit approval packet in the outbox, but no Slack,
+Teams, webhook, or Open WebUI network delivery is performed by these commands:
+
+```bash
+aegis connectors draft slack --target "#ops" --message "Status update"
+aegis connectors send slack --target "#ops" --message "Status update"
+aegis connectors send slack --target "#ops" --message "Status update" --approved
+aegis connectors outbox
 ```
 
 ## Optional Web Console
@@ -309,10 +323,11 @@ Hermes-class agent.
 Implemented: install/update lifecycle, terminal activation, TUI, terminal
 command catalog, setup checks, health checks, policy/audit receipts, typed
 workspace tools, governed git operations, task queues, automations, model-route
-metadata, connector metadata, memory review controls, passive skill trust
-metadata, and local agent/subagent orchestration.
+metadata, connector metadata with a redacted approval-bound outbox, memory
+review controls, passive skill trust metadata, and local agent/subagent
+orchestration.
 
-Partial: web console parity, external model routing, connectors,
+Partial: web console parity, external model routing, live connectors,
 self-improvement, richer browser automation, and deeper agent delegation.
 
 Next: stronger model-backed multi-agent execution, live browser control behind

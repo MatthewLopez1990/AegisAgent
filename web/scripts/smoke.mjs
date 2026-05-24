@@ -35,6 +35,7 @@ const requiredLabels = [
   "gateway live",
   "offline fallback",
   "GET /connectors",
+  "GET /connectors/outbox",
   "GET /dashboard",
   "GET /capabilities",
   "GET /tasks",
@@ -54,9 +55,22 @@ const requiredLabels = [
   "GET /subagents/jobs"
 ];
 
+const forbiddenLabels = [
+  "method: \"POST\"",
+  "method:'POST'",
+  "/connectors/draft",
+  "/connectors/send"
+];
+
 for (const label of requiredLabels) {
   if (!app.includes(label)) {
     throw new Error(`missing required GUI label: ${label}`);
+  }
+}
+
+for (const label of forbiddenLabels) {
+  if (app.includes(label)) {
+    throw new Error(`web GUI includes forbidden mutation surface: ${label}`);
   }
 }
 

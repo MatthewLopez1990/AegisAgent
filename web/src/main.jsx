@@ -282,6 +282,8 @@ function Connectors({ summary }) {
       <div className="connector-flags">
         <span>external delivery: {safeSummary.external_delivery_performed ? "performed" : "not performed"}</span>
         <span>browser auto-launch: {safeSummary.browser_auto_launch ? "enabled" : "off"}</span>
+        <span>outbox: {safeSummary.outbox_count || 0} packets</span>
+        <span>approved pending adapter: {safeSummary.approved_pending_adapter_count || 0}</span>
       </div>
       <div className="connector-grid">
         {connectors.map((connector) => (
@@ -295,7 +297,7 @@ function Connectors({ summary }) {
           </div>
         ))}
       </div>
-      <RouteList routes={["GET /connectors", "GET /connectors/doctor", "GET /setup/connectors", "GET /setup/run-checks"]} />
+      <RouteList routes={["GET /connectors", "GET /connectors/doctor", "GET /connectors/outbox", "GET /setup/connectors", "GET /setup/run-checks"]} />
     </div>
   );
 }

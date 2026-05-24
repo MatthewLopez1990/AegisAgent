@@ -360,6 +360,10 @@ class TuiRendererTests(unittest.TestCase):
         self.assertTrue(any(command == "/connectors" for command, _detail in connector_matches))
         connector_doctor_matches = slash_palette_candidates("/connectors d")
         self.assertTrue(any(command == "/connectors doctor" for command, _detail in connector_doctor_matches))
+        connector_send_matches = slash_palette_candidates("/connectors s")
+        self.assertTrue(any(command == "/connectors send" for command, _detail in connector_send_matches))
+        connector_outbox_matches = slash_palette_candidates("/connectors o")
+        self.assertTrue(any(command == "/connectors outbox" for command, _detail in connector_outbox_matches))
         subagent_monitor_matches = slash_palette_candidates("/subagents mon")
         self.assertTrue(any(command == "/subagents monitor" for command, _detail in subagent_monitor_matches))
         subagent_unwatch_matches = slash_palette_candidates("/subagents un")
@@ -652,6 +656,30 @@ class TuiRendererTests(unittest.TestCase):
 
             self.assertEqual(result, "connectors")
             self.assertIn('"browser_auto_launch": false', connector_doctor.getvalue())
+
+            connector_draft = io.StringIO()
+            with contextlib.redirect_stdout(connector_draft):
+                result = dispatch_interactive_command("/connectors draft slack | #ops | hello token=sk-abcdefghijklmnopqrstuvwxyz123456", paths)
+
+            self.assertEqual(result, "connectors")
+            self.assertIn('"status": "drafted"', connector_draft.getvalue())
+            self.assertIn("token=[REDACTED]", connector_draft.getvalue())
+            self.assertIn('"external_delivery_performed": false', connector_draft.getvalue())
+
+            connector_send = io.StringIO()
+            with contextlib.redirect_stdout(connector_send):
+                result = dispatch_interactive_command("/connectors send slack | #ops | hello", paths)
+
+            self.assertEqual(result, "connectors")
+            self.assertIn('"status": "needs_approval"', connector_send.getvalue())
+
+            connector_outbox = io.StringIO()
+            with contextlib.redirect_stdout(connector_outbox):
+                result = dispatch_interactive_command("/connectors outbox", paths)
+
+            self.assertEqual(result, "connectors")
+            self.assertIn('"outbox"', connector_outbox.getvalue())
+            self.assertIn('"browser_auto_launch": false', connector_outbox.getvalue())
 
             doctor = io.StringIO()
             with contextlib.redirect_stdout(doctor):
