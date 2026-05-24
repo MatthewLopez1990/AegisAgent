@@ -55,6 +55,7 @@ from aegisagent.gateway import run_gateway
 from aegisagent.security.audit import AuditLog
 from aegisagent.security.policy import decide_tool
 from aegisagent.security.sandbox import detect_sandbox
+from aegisagent.tui.interactive import command_catalog_payload, render_command_lanes
 from aegisagent.tui.renderer import TuiState, render
 from aegisagent.tui.textual_app import run_textual_app
 
@@ -72,6 +73,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--workspace", default=None, help="Workspace root. Defaults to current directory.")
     parser.add_argument("--json", action="store_true", help="Emit JSON where supported.")
     sub = parser.add_subparsers(dest="command")
+    sub.add_parser("init", help="Compatibility alias for terminal setup quickstart.")
     sub.add_parser("activate", help="Launch the terminal-first AegisAgent TUI, or print activation instructions outside a TTY.")
     sub.add_parser("activation", help="Print terminal activation and browser-off readiness details.")
     completion = sub.add_parser("completion", help="Emit dependency-free shell completion for the terminal command.")
@@ -86,6 +88,10 @@ def build_parser() -> argparse.ArgumentParser:
     setup.add_argument("--run-checks", action="store_true")
     capabilities = sub.add_parser("capabilities", help="Show terminal-visible Hermes-class capability parity map.")
     capabilities.add_argument("--gaps", action="store_true", help="Show only partial, metadata-ready, and planned capabilities.")
+    commands = sub.add_parser("commands", help="Show terminal TUI slash command lanes without launching a browser.")
+    commands.add_argument("query", nargs="?", default="", help="Optional command, group, or detail filter.")
+    commands.add_argument("--group", default="", help="Only show one command group, for example Build or Setup.")
+    commands.add_argument("--json", action="store_true", help="Emit the command catalog as JSON.")
     sub.add_parser("dashboard", help="Show a terminal-first operator dashboard without starting web or browser surfaces.")
     install = sub.add_parser("install", help="Show or install macOS/Linux terminal command shims.")
     install.add_argument("install_command", nargs="?", default="status", choices=["status", "shim"], help="Preview install status or write a terminal shim.")
@@ -304,6 +310,11 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(payload, indent=2) if args.json else format_terminal_activation(payload))
         return 0
 
+    if args.command == "init":
+        setup_guide = SetupGuide(paths)
+        print(json.dumps(setup_guide.quickstart(), indent=2) if args.json else format_setup_quickstart(setup_guide.quickstart()))
+        return 0
+
     if args.command == "setup":
         setup_guide = SetupGuide(paths)
         setup_section = normalize_setup_section(args.section)
@@ -334,6 +345,11 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps(json_payload, indent=2))
         else:
             print(format_capabilities(payload, gaps_only=args.gaps))
+        return 0
+
+    if args.command == "commands":
+        payload = command_catalog_payload(paths, prefix=args.query, group=args.group)
+        print(json.dumps(payload, indent=2) if args.json else render_command_lanes(payload))
         return 0
 
     if args.command == "dashboard":

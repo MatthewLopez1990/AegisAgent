@@ -470,6 +470,8 @@ def build_interactive_panels(paths: RuntimePaths, *, active_menu: str | None = N
     else:
         focus = (
             InteractiveItem("Start setup", "Walk model, secrets, sandbox, tools, and checks.", "/setup", "next"),
+            InteractiveItem("Command lanes", "Browse Hermes-style terminal commands by group or prefix.", "/commands", "map"),
+            InteractiveItem("Agent contracts", "Review planner, researcher, implementer, reviewer scopes.", "/agents contracts", "bounded"),
             InteractiveItem("Plain prompt", "Type a request; Aegis answers through the local terminal provider.", "", "safe"),
             InteractiveItem("Policy check", "Try /policy shell rg --files.", "/policy shell rg --files", "allow"),
             InteractiveItem("Audit verify", "Check the receipt hash chain.", "/audit", "ready"),
@@ -568,6 +570,9 @@ class _CursesAegisAgent:
                 return
             if key in (ord("q"),) and not self.input_buffer:
                 return
+            if key == ord("?") and not self.input_buffer:
+                self._run_command("/help")
+                continue
             if key == 27:
                 if self.input_buffer:
                     self.input_buffer = ""
@@ -1012,11 +1017,19 @@ def dispatch_interactive_command(command: str, paths: RuntimePaths) -> str:
         return "activation"
     if command.startswith("/commands") or command.startswith("/menu"):
         prefix = ""
+        emit_json = False
         if command.startswith("/commands"):
-            prefix = command.removeprefix("/commands").strip().lstrip("/")
+            raw = command.removeprefix("/commands").strip()
+            emit_json = raw == "json" or raw.endswith(" --json")
+            prefix = raw.removesuffix("--json").strip()
+            if prefix == "json":
+                prefix = ""
         elif command.startswith("/menu"):
             prefix = command.removeprefix("/menu").strip()
-        print(_render_command_lanes(prefix))
+        if emit_json:
+            print_json(command_catalog_payload(paths, prefix=prefix))
+        else:
+            print(render_command_lanes(command_catalog_payload(paths, prefix=prefix)))
         return "commands"
     if _slash_invoked(command, "/dashboard"):
         print(format_dashboard(dashboard_payload(paths)))
@@ -1956,6 +1969,11 @@ def _initial_output_lines(paths: RuntimePaths, *, setup_open: bool = False) -> l
                 "4. /setup first-task   try one safe starter task",
                 "5. /setup hide         keep future default launches prompt-first",
                 "",
+                "First launch: setup is open; composer is live.",
+                "Next: /setup next -> /setup run-checks -> /setup first-task",
+                "Use /commands setup for setup lanes; /setup hide dismisses this panel.",
+                "Web stays optional and off until explicitly approved.",
+                "",
             ]
         )
     lines.extend(
@@ -1985,25 +2003,79 @@ def _wrap_lines(lines: list[str], width: int) -> list[str]:
     return wrapped
 
 
-def _render_command_lanes(prefix: str = "") -> str:
+def command_catalog_payload(paths: RuntimePaths, *, prefix: str = "", group: str = "") -> dict[str, Any]:
     needle = prefix.lower().strip().lstrip("/")
+    group_filter = group.lower().strip()
+    groups: list[dict[str, Any]] = []
+    command_count = 0
+    matched_count = 0
+    for group_name, commands in COMMAND_MENU_GROUPS:
+        command_count += len(commands)
+        if group_filter and group_filter not in group_name.lower():
+            continue
+        rows = []
+        for command, detail in commands:
+            if needle and needle not in command.lower() and needle not in detail.lower() and needle not in group_name.lower():
+                continue
+            rows.append(
+                {
+                    "command": command,
+                    "detail": detail,
+                    "group": group_name,
+                    "terminal_first": True,
+                    "browser_auto_launch": False,
+                    "approval_hint": "requires approval" if "approve" in command or "approval" in detail else "none",
+                }
+            )
+        if rows:
+            matched_count += len(rows)
+            groups.append({"name": group_name, "count": len(rows), "commands": rows})
+    return {
+        "title": "AEGIS TERMINAL COMMAND CATALOG",
+        "workspace": str(paths.workspace),
+        "prefix": prefix,
+        "group": group,
+        "terminal_first": True,
+        "browser_required": False,
+        "browser_auto_launch": False,
+        "gateway_started": False,
+        "external_action_started": False,
+        "plain_text_submits_task": True,
+        "tab_completion": True,
+        "groups": groups,
+        "counts": {"groups": len(groups), "commands": command_count, "matched": matched_count},
+        "examples": ["aegis commands setup", "aegis commands --group Build", "/commands agents", "/commands json"],
+    }
+
+
+def render_command_lanes(payload: dict[str, Any]) -> str:
     lines = [
-        "AEGIS SHIELD command lanes",
+        str(payload["title"]),
         "Plain text submits a governed task. Slash commands dispatch directly. Tab completes in the live TUI.",
+        (
+            "safety terminal_first=true browser_auto_launch=false "
+            "gateway_started=false external_action_started=false"
+        ),
         "",
     ]
     matched = False
-    for group, commands in COMMAND_MENU_GROUPS:
-        rows = [(command, detail) for command, detail in commands if not needle or needle in command.lower() or needle in detail.lower() or needle in group.lower()]
-        if not rows:
-            continue
+    for group in payload["groups"]:
         matched = True
-        lines.append(f"[{group}]")
-        for command, detail in rows:
-            lines.append(f"  {command:<30} {detail}")
+        lines.append(f"[{group['name']}]")
+        for row in group["commands"]:
+            lines.append(f"  {row['command']:<30} {row['detail']}")
         lines.append("")
     if not matched:
-        lines.extend([f"No command lane matched `{prefix}`.", "Try /commands, /commands git, /commands setup, or /menu build."])
+        query = payload.get("prefix") or payload.get("group") or ""
+        lines.extend([f"No command lane matched `{query}`.", "Try /commands, /commands git, /commands setup, or /menu build."])
+    lines.extend(
+        [
+            "examples",
+            "- aegis commands setup",
+            "- aegis commands --group Build",
+            "- /commands json",
+        ]
+    )
     return "\n".join(lines).rstrip()
 
 

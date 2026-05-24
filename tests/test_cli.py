@@ -98,9 +98,17 @@ class CliTests(unittest.TestCase):
         self.assertLess(update_text.index("require_python_version"), update_text.index('git -C "$INSTALL_DIR" fetch origin "$BRANCH"'))
         self.assertIn("python3 -m aegisagent install shim --approved", update_text)
         self.assertNotIn("open ", install_text)
+        self.assertNotIn("open -a", install_text)
         self.assertNotIn("xdg-open", install_text)
+        self.assertNotIn("webbrowser", install_text)
+        self.assertNotIn("python -m webbrowser", install_text)
+        self.assertNotIn("start http", install_text)
         self.assertNotIn("open ", update_text)
+        self.assertNotIn("open -a", update_text)
         self.assertNotIn("xdg-open", update_text)
+        self.assertNotIn("webbrowser", update_text)
+        self.assertNotIn("python -m webbrowser", update_text)
+        self.assertNotIn("start http", update_text)
         for script in (install, update):
             syntax = subprocess.run(["sh", "-n", str(script)], text=True, capture_output=True, check=False)
             self.assertEqual(syntax.returncode, 0, syntax.stderr)
@@ -236,7 +244,7 @@ class CliTests(unittest.TestCase):
             self.assertIn('"browser_auto_launch": false', outputs["setup checks"])
             self.assertIn('"ok": true', outputs["health"])
             self.assertIn('"ok": true', outputs["audit"])
-            self.assertIn("Optional web is preview-only until explicitly approved.", outputs["tui print"])
+            self.assertIn("Web stays optional and off until explicitly approved.", outputs["tui print"])
 
             (source / "install-smoke-version.txt").write_text("v2\n", encoding="utf-8")
             subprocess.run(["git", "add", "install-smoke-version.txt"], cwd=source, text=True, capture_output=True, check=True)
@@ -456,7 +464,7 @@ class CliTests(unittest.TestCase):
 
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertIn(marker, result.stdout)
-                for token in ("setup", "tui", "web", "tasks", "agents", "completion"):
+                for token in ("init", "setup", "commands", "tui", "web", "tasks", "agents", "completion"):
                     self.assertIn(token, result.stdout)
                 for token in ("model-auth", "connections", "skills", "plugins", "check", "checks", "verify", "doctor", "init", "first-task", "--init"):
                     self.assertIn(token, result.stdout)
@@ -478,6 +486,27 @@ class CliTests(unittest.TestCase):
             self.assertIn("completion program must contain only", rejected.stderr)
             self.assertNotIn("complete -F", rejected.stdout)
             self.assertFalse((Path(tmp) / ".aegisagent").exists())
+
+    def test_commands_catalog_is_terminal_only_and_filterable(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            text = run_cli("commands", "agents", cwd=tmp)
+            payload_result = run_cli("commands", "--group", "Build", "--json", cwd=tmp)
+
+        self.assertEqual(text.returncode, 0, text.stderr)
+        self.assertIn("AEGIS TERMINAL COMMAND CATALOG", text.stdout)
+        self.assertIn("safety terminal_first=true browser_auto_launch=false gateway_started=false", text.stdout)
+        self.assertIn("/agents contracts", text.stdout)
+        self.assertIn("/agents delegate <task>", text.stdout)
+        self.assertEqual(payload_result.returncode, 0, payload_result.stderr)
+        payload = json.loads(payload_result.stdout)
+        self.assertEqual(payload["title"], "AEGIS TERMINAL COMMAND CATALOG")
+        self.assertTrue(payload["terminal_first"])
+        self.assertFalse(payload["browser_auto_launch"])
+        self.assertFalse(payload["gateway_started"])
+        self.assertEqual([group["name"] for group in payload["groups"]], ["Build"])
+        build_commands = [row["command"] for row in payload["groups"][0]["commands"]]
+        self.assertIn("/git status", build_commands)
+        self.assertIn("/agents delegate <task>", build_commands)
 
     def test_web_command_is_preview_only_until_serve_is_approved(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -624,7 +653,11 @@ class CliTests(unittest.TestCase):
             plugins = run_cli("setup", "plugins", cwd=tmp)
             first_task = run_cli("setup", "first-task", cwd=tmp)
             init_section = run_cli("setup", "init", cwd=tmp)
+            initialize_section = run_cli("setup", "initialize", cwd=tmp)
+            init_alias = run_cli("init", cwd=tmp)
             init = run_cli("setup", "--init", cwd=tmp)
+            step_one = run_cli("setup", "1", cwd=tmp)
+            step_six = run_cli("setup", "6", cwd=tmp)
 
         self.assertEqual(model_auth.returncode, 0, model_auth.stderr)
         self.assertIn("AEGIS SETUP :: model", model_auth.stdout)
@@ -643,9 +676,19 @@ class CliTests(unittest.TestCase):
         self.assertEqual(init_section.returncode, 0, init_section.stderr)
         self.assertIn("AEGIS SETUP QUICKSTART", init_section.stdout)
         self.assertIn("No browser is launched by setup", init_section.stdout)
+        self.assertEqual(initialize_section.returncode, 0, initialize_section.stderr)
+        self.assertIn("AEGIS SETUP QUICKSTART", initialize_section.stdout)
+        self.assertIn("No browser is launched by setup", initialize_section.stdout)
+        self.assertEqual(init_alias.returncode, 0, init_alias.stderr)
+        self.assertIn("AEGIS SETUP QUICKSTART", init_alias.stdout)
+        self.assertIn("No browser is launched by setup", init_alias.stdout)
         self.assertEqual(init.returncode, 0, init.stderr)
         self.assertIn("AEGIS SETUP QUICKSTART", init.stdout)
         self.assertIn("No browser is launched by setup", init.stdout)
+        self.assertEqual(step_one.returncode, 0, step_one.stderr)
+        self.assertIn("AEGIS SETUP :: model", step_one.stdout)
+        self.assertEqual(step_six.returncode, 0, step_six.stderr)
+        self.assertIn("AEGIS SETUP :: memory", step_six.stdout)
 
     def test_setup_rejects_unknown_alias_without_runtime_side_effects(self):
         with tempfile.TemporaryDirectory() as tmp:

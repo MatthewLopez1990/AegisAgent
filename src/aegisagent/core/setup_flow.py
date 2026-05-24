@@ -18,6 +18,13 @@ from aegisagent.security.sandbox import detect_sandbox
 
 SETUP_SECTIONS = ("model", "secrets", "sandbox", "tools", "connectors", "memory")
 SETUP_ALIASES = {
+    "1": "model",
+    "2": "secrets",
+    "3": "sandbox",
+    "4": "tools",
+    "5": "connectors",
+    "6": "memory",
+    "initialize": "quickstart",
     "model-auth": "model",
     "connections": "connectors",
     "skills": "memory",

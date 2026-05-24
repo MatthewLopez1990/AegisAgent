@@ -6,9 +6,13 @@ This reference lists common terminal and TUI commands after AegisAgent is instal
 
 ```bash
 aegis
+aegis init
 aegis tui
 aegis activate
 aegis activation
+aegis commands
+aegis commands setup
+aegis commands --group Build --json
 aegis setup next
 aegis setup model
 aegis setup --run-checks
@@ -36,7 +40,9 @@ aegis activation            print activation/readiness card
 aegisagent                  package-installed alias for the same CLI
 
 aegis setup init            setup quickstart
+aegis setup initialize      setup quickstart
 aegis setup model-auth      model setup section
+aegis setup 1..6            hidden compatibility aliases for model through memory
 aegis setup check           metadata-only setup checks
 aegis setup checks          metadata-only setup checks
 aegis setup verify          metadata-only setup checks
@@ -49,6 +55,7 @@ aegis setup first-task      safe first terminal task guidance
 
 ```text
 /menu                       grouped command lanes
+/commands json              machine-readable terminal command catalog
 /activate                   activation card alias
 /q <request>                quick task submit
 /setup continue             next setup step
@@ -71,6 +78,7 @@ aegis setup first-task      safe first terminal task guidance
 
 ```text
 /commands
+/commands json
 /setup next
 /setup model
 /setup model-auth

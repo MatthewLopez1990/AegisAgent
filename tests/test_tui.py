@@ -32,6 +32,9 @@ class TuiRendererTests(unittest.TestCase):
         self.assertIn("security posture", output)
         self.assertIn("Aegis is active in this terminal.", output)
         self.assertIn("No command has run in this frame.", output)
+        self.assertIn("First launch: setup is open; composer is live.", output)
+        self.assertIn("Next: /setup next -> /setup run-checks -> /setup first-task", output)
+        self.assertIn("Web stays optional and off until explicitly approved.", output)
         self.assertIn("provider   local fallback", output)
         self.assertIn("approval   none pending", output)
         self.assertIn("Enter send | / commands | Tab complete", output)
@@ -153,6 +156,8 @@ class TuiRendererTests(unittest.TestCase):
         self.assertIn("/activation", commands)
         self.assertIn("/tools", commands)
         self.assertIn("/dashboard", commands)
+        self.assertIn("/commands", commands)
+        self.assertIn("/agents contracts", commands)
         self.assertIn("/audit", commands)
         self.assertIn("/web", commands)
 
@@ -183,6 +188,9 @@ class TuiRendererTests(unittest.TestCase):
             deck = _CursesAegisAgent(object(), paths, FakeCurses)
             self.assertEqual(deck.active_menu, "setup")
             self.assertIn("Aegis setup wizard is open by default.", deck.output_lines)
+            self.assertIn("First launch: setup is open; composer is live.", deck.output_lines)
+            self.assertIn("Next: /setup next -> /setup run-checks -> /setup first-task", deck.output_lines)
+            self.assertIn("Web stays optional and off until explicitly approved.", deck.output_lines)
 
             output = io.StringIO()
             with contextlib.redirect_stdout(output):
@@ -372,9 +380,92 @@ class TuiRendererTests(unittest.TestCase):
                 result = dispatch_interactive_command("/commands git", paths)
 
             self.assertEqual(result, "commands")
-            self.assertIn("AEGIS SHIELD command lanes", output.getvalue())
+            self.assertIn("AEGIS TERMINAL COMMAND CATALOG", output.getvalue())
+            self.assertIn("browser_auto_launch=false", output.getvalue())
             self.assertIn("/git status", output.getvalue())
             self.assertIn("/git diff", output.getvalue())
+
+            json_output = io.StringIO()
+            with contextlib.redirect_stdout(json_output):
+                result = dispatch_interactive_command("/commands json", paths)
+
+            self.assertEqual(result, "commands")
+            payload = json.loads(json_output.getvalue())
+            self.assertEqual(payload["title"], "AEGIS TERMINAL COMMAND CATALOG")
+            self.assertTrue(payload["terminal_first"])
+            self.assertFalse(payload["browser_auto_launch"])
+            self.assertTrue(payload["groups"])
+
+    def test_live_tui_question_mark_opens_help_without_prompt_text(self):
+        class FakeCurses:
+            A_BOLD = 0
+            ALL_MOUSE_EVENTS = 0
+            KEY_ENTER = 343
+            KEY_BACKSPACE = 263
+            KEY_LEFT = 260
+            KEY_RIGHT = 261
+            KEY_UP = 259
+            KEY_DOWN = 258
+            KEY_BTAB = 353
+            KEY_MOUSE = 409
+            COLOR_CYAN = 0
+            COLOR_MAGENTA = 0
+            COLOR_BLACK = 0
+            COLOR_WHITE = 0
+            COLOR_YELLOW = 0
+            COLOR_GREEN = 0
+            COLOR_RED = 0
+
+            @staticmethod
+            def color_pair(_number: int) -> int:
+                return 0
+
+            @staticmethod
+            def curs_set(_value: int) -> None:
+                return None
+
+            @staticmethod
+            def has_colors() -> bool:
+                return False
+
+            @staticmethod
+            def mousemask(_value: int) -> None:
+                return None
+
+        class FakeScreen:
+            def __init__(self) -> None:
+                self.keys = [ord("?"), 27]
+
+            def keypad(self, _enabled: bool) -> None:
+                return None
+
+            def timeout(self, _timeout: int) -> None:
+                return None
+
+            def getch(self) -> int:
+                return self.keys.pop(0)
+
+            def getmaxyx(self) -> tuple[int, int]:
+                return (32, 100)
+
+            def erase(self) -> None:
+                return None
+
+            def addstr(self, *_args: object) -> None:
+                return None
+
+            def refresh(self) -> None:
+                return None
+
+            def move(self, *_args: object) -> None:
+                return None
+
+        with tempfile.TemporaryDirectory() as tmp:
+            deck = _CursesAegisAgent(FakeScreen(), runtime_paths(tmp), FakeCurses)
+            deck.run()
+
+        self.assertIn("$ /help", deck.output_lines)
+        self.assertTrue(any("AegisAgent TUI controls" in line for line in deck.output_lines))
 
     def test_interactive_dispatch_model_providers_is_terminal_only(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -470,6 +561,20 @@ class TuiRendererTests(unittest.TestCase):
             self.assertEqual(result, "setup")
             self.assertIn('"metadata_only": true', setup_check.getvalue())
             self.assertIn('"model_invocation_performed": false', setup_check.getvalue())
+
+            setup_step_one = io.StringIO()
+            with contextlib.redirect_stdout(setup_step_one):
+                result = dispatch_interactive_command("/setup 1", paths)
+
+            self.assertEqual(result, "setup")
+            self.assertIn("AEGIS SETUP :: model", setup_step_one.getvalue())
+
+            setup_step_six = io.StringIO()
+            with contextlib.redirect_stdout(setup_step_six):
+                result = dispatch_interactive_command("/setup 6", paths)
+
+            self.assertEqual(result, "setup")
+            self.assertIn("AEGIS SETUP :: memory", setup_step_six.getvalue())
 
             setup_init = io.StringIO()
             with contextlib.redirect_stdout(setup_init):

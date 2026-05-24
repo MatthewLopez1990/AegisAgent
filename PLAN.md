@@ -69,7 +69,7 @@ Run implementation in checkpoints. At each checkpoint, spawn parallel subagents 
 - Security acceptance: no secret appears in transcript/audit output; destructive commands fail closed; host writes/network require visible approval; audit verification detects tampering.
 
 ## Assumptions
-- The current repo is intentionally blank except for `ReferenceImages/`; implementation should scaffold from scratch.
+- The repo now has a checkpointed terminal-first foundation; continue by extending the current implementation instead of treating it as blank.
 - Python core + Textual TUI + FastAPI backend + React Web GUI is the chosen stack.
 - Hermes/OpenClaw are comparison targets, not code to copy directly.
 - “Same abilities” means parity by capability class, with Aegis-specific security controls taking precedence over exact UX or internal implementation.

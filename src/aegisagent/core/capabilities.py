@@ -53,10 +53,10 @@ CAPABILITIES: tuple[Capability, ...] = (
         "prompt_first_tui",
         "Prompt-first TUI",
         "ready",
-        "Composer, slash palette, setup deck, task monitors, and static fallback are available.",
+        "Composer, slash palette, terminal command catalog, setup deck, task monitors, and static fallback are available.",
         "primary",
         "Continue polishing narrow terminal copy and help density.",
-        ("aegis tui", "aegis tui --print", "/commands"),
+        ("aegis tui", "aegis commands", "aegis tui --print", "/commands json"),
     ),
     Capability(
         "setup_wizard",

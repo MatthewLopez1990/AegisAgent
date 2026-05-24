@@ -80,6 +80,7 @@ Useful first commands inside the TUI:
 /setup next
 /setup first-task
 /commands
+/commands json
 /dashboard
 /setup hide
 ```
@@ -155,8 +156,11 @@ AEGIS_REPO_URL="https://github.com/MatthewLopez1990/AegisAgent.git"
 ```bash
 aegis                         # start the terminal UI
 aegis tui                     # explicit terminal UI launch
+aegis init                    # compatibility alias for setup quickstart
 aegis activate                # launch TUI in a TTY, activation card otherwise
 aegis activation              # print terminal activation/readiness card
+aegis commands                # show terminal slash-command lanes
+aegis commands setup          # filter command lanes by setup/onboarding terms
 aegis setup next              # show the next setup action
 aegis setup model             # review or configure the model route
 aegis setup --run-checks      # run metadata-only readiness checks
@@ -178,7 +182,10 @@ Implemented setup aliases are intentionally small and terminal-only:
 
 ```bash
 aegis setup init              # setup quickstart
+aegis setup initialize        # setup quickstart
 aegis setup model-auth        # same setup section as model
+aegis setup 1                 # hidden setup step alias for model
+aegis setup 6                 # hidden setup step alias for memory
 aegis setup check             # same readiness receipt as --run-checks
 aegis setup checks            # same readiness receipt as --run-checks
 aegis setup verify            # same readiness receipt as --run-checks
@@ -190,7 +197,9 @@ aegis setup plugins           # same setup section as memory
 
 Inside the TUI, the matching slash commands work the same way:
 `/setup model-auth`, `/setup verify`, `/setup connections`, and
-`/setup skills` route to the canonical setup screens.
+`/setup skills` route to the canonical setup screens. Hidden setup step numbers
+such as `/setup 1` through `/setup 6` are accepted for compatibility, but the
+named commands stay primary in help and completion.
 
 ## Model And Secret Setup
 
@@ -284,11 +293,11 @@ PYTHONPATH=src python3 -m aegisagent audit verify
 AegisAgent is still an early terminal-first foundation, not a complete
 Hermes-class agent.
 
-Implemented: install/update lifecycle, terminal activation, TUI, setup checks,
-health checks, policy/audit receipts, typed workspace tools, governed git
-operations, task queues, automations, model-route metadata, connector metadata,
-memory review controls, passive skill trust metadata, and local agent/subagent
-orchestration.
+Implemented: install/update lifecycle, terminal activation, TUI, terminal
+command catalog, setup checks, health checks, policy/audit receipts, typed
+workspace tools, governed git operations, task queues, automations, model-route
+metadata, connector metadata, memory review controls, passive skill trust
+metadata, and local agent/subagent orchestration.
 
 Partial: web console parity, external model routing, connectors,
 self-improvement, richer browser automation, and deeper agent delegation.

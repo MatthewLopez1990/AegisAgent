@@ -90,13 +90,16 @@ def render_command(state: TuiState, width: int, height: int) -> str:
         _panel_line("No command has run in this frame.", left_width),
         _blank_panel(left_width),
         _panel_line("Start: /setup next | /activation | /help", left_width),
+        _panel_line("First launch: setup is open; composer is live.", left_width),
+        _panel_line("Next: /setup next -> /setup run-checks -> /setup first-task", left_width),
+        _panel_line("Use /commands setup for setup lanes; /setup hide dismisses this panel.", left_width),
         _panel_line("Verify: /setup run-checks | /audit | /dashboard", left_width),
         _panel_line("Work: type a request, or use /commands for slash lanes.", left_width),
         _blank_panel(left_width),
         _panel_line("Security: writes and network ask first.", left_width),
         _panel_line("Receipts appear after real actions. Secrets stay redacted.", left_width),
         _blank_panel(left_width),
-        _panel_line("Optional web is preview-only until explicitly approved.", left_width),
+        _panel_line("Web stays optional and off until explicitly approved.", left_width),
     ]
     header = [
         _row("AEGIS SHIELD prompt-first governed agent", status, width),
