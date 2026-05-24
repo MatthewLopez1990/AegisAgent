@@ -630,6 +630,8 @@ class BackgroundJobRecord:
     root_id: str = ""
     receipt_id: str = ""
     summary: str = ""
+    reusable_artifact_ids: list[str] = field(default_factory=list)
+    artifact_reuse_approved: bool = False
     created_at: str = field(default_factory=utc_now)
     updated_at: str = field(default_factory=utc_now)
     started_at: str = ""
@@ -644,6 +646,9 @@ class BackgroundJobRecord:
             "root_id": self.root_id,
             "receipt_id": self.receipt_id,
             "summary": self.summary,
+            "reusable_artifact_ids": self.reusable_artifact_ids,
+            "artifact_reuse_approved": self.artifact_reuse_approved,
+            "reusable_artifact_count": len(self.reusable_artifact_ids),
             "created_at": self.created_at,
             "updated_at": self.updated_at,
             "started_at": self.started_at,
@@ -660,6 +665,8 @@ class BackgroundJobRecord:
             root_id=str(data.get("root_id") or ""),
             receipt_id=str(data.get("receipt_id") or ""),
             summary=str(data.get("summary") or ""),
+            reusable_artifact_ids=[str(item) for item in data.get("reusable_artifact_ids", [])],
+            artifact_reuse_approved=bool(data.get("artifact_reuse_approved")),
             created_at=str(data.get("created_at") or utc_now()),
             updated_at=str(data.get("updated_at") or utc_now()),
             started_at=str(data.get("started_at") or ""),
@@ -672,8 +679,19 @@ class BackgroundJobStore:
         self.paths = paths
         ensure_runtime(paths)
 
-    def create(self, task: str) -> BackgroundJobRecord:
-        record = BackgroundJobRecord(id=uuid4().hex[:10], task=task)
+    def create(
+        self,
+        task: str,
+        *,
+        reusable_artifact_ids: tuple[str, ...] | list[str] = (),
+        reuse_approved: bool = False,
+    ) -> BackgroundJobRecord:
+        record = BackgroundJobRecord(
+            id=uuid4().hex[:10],
+            task=task,
+            reusable_artifact_ids=[str(artifact_id) for artifact_id in reusable_artifact_ids],
+            artifact_reuse_approved=bool(reuse_approved and reusable_artifact_ids),
+        )
         self.save(record)
         return record
 
@@ -714,12 +732,8 @@ class LocalSubagentOrchestrator:
         reuse_approved: bool = False,
         event_sink: Callable[[SubagentEvent], None] | None = None,
     ) -> SubagentDelegationResult:
-        reusable_ids = tuple(dict.fromkeys(str(artifact_id).strip() for artifact_id in reusable_artifact_ids if str(artifact_id).strip()))
-        if len(reusable_ids) > 8:
-            raise ValueError("cross-delegation artifact reuse is limited to 8 artifacts")
-        if reusable_ids and not reuse_approved:
-            raise ValueError("cross-delegation artifact reuse requires explicit approval")
-        reused_artifacts = [self.store.artifact(artifact_id, include_content=False, require_valid_content=True) for artifact_id in reusable_ids]
+        reusable_ids = _normalize_reusable_artifact_ids(reusable_artifact_ids)
+        reused_artifacts = _validated_reused_artifacts(self.store, reusable_ids, reuse_approved=bool(reuse_approved))
         queue = SubagentQueue(self.limits)
         root_session = self.sessions.create(f"subagent root {task[:32]}")
         root = queue.spawn(task, role="coordinator", session_id=root_session.id)
@@ -1071,11 +1085,32 @@ class LocalSubagentOrchestrator:
             "raw_secret_values_included": False,
         }
 
-    def start_background(self, task: str) -> BackgroundJobRecord:
+    def start_background(
+        self,
+        task: str,
+        *,
+        reusable_artifact_ids: tuple[str, ...] | list[str] = (),
+        reuse_approved: bool = False,
+    ) -> BackgroundJobRecord:
         jobs = BackgroundJobStore(self.paths)
-        record = jobs.create(task)
+        reusable_ids = _normalize_reusable_artifact_ids(reusable_artifact_ids)
+        if reusable_ids:
+            _validated_reused_artifacts(self.store, reusable_ids, reuse_approved=bool(reuse_approved))
+        record = jobs.create(task, reusable_artifact_ids=reusable_ids, reuse_approved=bool(reuse_approved))
         if os.environ.get("AEGISAGENT_BACKGROUND_NO_SPAWN"):
-            self.audit.append("subagent.background.queued", {"job_id": record.id, "task": task, "external_action_started": False})
+            self.audit.append(
+                "subagent.background.queued",
+                {
+                    "job_id": record.id,
+                    "task": task,
+                    "reusable_artifact_ids": record.reusable_artifact_ids,
+                    "reusable_artifact_count": len(record.reusable_artifact_ids),
+                    "artifact_reuse_approved": record.artifact_reuse_approved,
+                    "external_action_started": False,
+                    "browser_auto_launch": False,
+                    "raw_secret_values_included": False,
+                },
+            )
             return record
         command = [
             sys.executable,
@@ -1097,7 +1132,20 @@ class LocalSubagentOrchestrator:
         record.pid = process.pid
         record.started_at = utc_now()
         jobs.save(record)
-        self.audit.append("subagent.background.started", {"job_id": record.id, "pid": record.pid, "task": task, "external_action_started": False})
+        self.audit.append(
+            "subagent.background.started",
+            {
+                "job_id": record.id,
+                "pid": record.pid,
+                "task": task,
+                "reusable_artifact_ids": record.reusable_artifact_ids,
+                "reusable_artifact_count": len(record.reusable_artifact_ids),
+                "artifact_reuse_approved": record.artifact_reuse_approved,
+                "external_action_started": False,
+                "browser_auto_launch": False,
+                "raw_secret_values_included": False,
+            },
+        )
         return record
 
     def run_background_job(self, job_id: str) -> BackgroundJobRecord:
@@ -1114,7 +1162,11 @@ class LocalSubagentOrchestrator:
                 record = jobs.get(job_id)
                 if record.status == "cancelled":
                     return record
-            result = self.delegate(record.task)
+            result = self.delegate(
+                record.task,
+                reusable_artifact_ids=record.reusable_artifact_ids,
+                reuse_approved=record.artifact_reuse_approved,
+            )
             record.status = "completed"
             record.pid = None
             record.root_id = result.root.id
@@ -1124,7 +1176,17 @@ class LocalSubagentOrchestrator:
             jobs.save(record)
             self.audit.append(
                 "subagent.background.completed",
-                {"job_id": record.id, "root_id": record.root_id, "receipt_id": record.receipt_id, "external_action_started": False},
+                {
+                    "job_id": record.id,
+                    "root_id": record.root_id,
+                    "receipt_id": record.receipt_id,
+                    "reusable_artifact_ids": record.reusable_artifact_ids,
+                    "reusable_artifact_count": len(record.reusable_artifact_ids),
+                    "artifact_reuse_approved": record.artifact_reuse_approved,
+                    "external_action_started": False,
+                    "browser_auto_launch": False,
+                    "raw_secret_values_included": False,
+                },
             )
         except Exception as exc:
             record.status = "failed"
@@ -1392,6 +1454,8 @@ def format_background_job(record: BackgroundJobRecord) -> str:
         f"job       {record.id}  {record.status}",
         f"task      {record.task}",
     ]
+    if record.reusable_artifact_ids:
+        lines.append(f"reuse     {len(record.reusable_artifact_ids)} approved artifacts")
     if record.pid:
         lines.append(f"pid       {record.pid}")
     if record.root_id:
@@ -1406,14 +1470,15 @@ def format_background_job(record: BackgroundJobRecord) -> str:
 def format_background_jobs(records: list[dict[str, Any]]) -> str:
     if not records:
         return "SUBAGENT BACKGROUND JOBS\nNo background jobs yet. Use /subagents bg <task>."
-    lines = ["SUBAGENT BACKGROUND JOBS", "status      job         pid        root        task"]
+    lines = ["SUBAGENT BACKGROUND JOBS", "status      job         pid        root        reuse  task"]
     for record in records[:20]:
         pid = str(record.get("pid") or "-")
         root = str(record.get("root_id") or "-")
+        reuse = str(record.get("reusable_artifact_count") or len(record.get("reusable_artifact_ids", [])) or "-")
         task = str(record.get("task") or "")
         if len(task) > 42:
             task = task[:39] + "..."
-        lines.append(f"{record.get('status', ''):<11} {record.get('id', ''):<11} {pid:<10} {root:<11} {task}")
+        lines.append(f"{record.get('status', ''):<11} {record.get('id', ''):<11} {pid:<10} {root:<11} {reuse:<6} {task}")
     return "\n".join(lines)
 
 
@@ -1705,6 +1770,24 @@ def _assert_worker_budget_contract(worker: SubagentRecord, budget_policy: dict[s
             raise ValueError(f"{worker.role} exceeded tool budget browser boundary")
         if artifact.get("raw_secret_values_included"):
             raise ValueError(f"{worker.role} exceeded tool budget secret boundary")
+
+
+def _normalize_reusable_artifact_ids(reusable_artifact_ids: tuple[str, ...] | list[str]) -> tuple[str, ...]:
+    reusable_ids = tuple(dict.fromkeys(str(artifact_id).strip() for artifact_id in reusable_artifact_ids if str(artifact_id).strip()))
+    if len(reusable_ids) > 8:
+        raise ValueError("cross-delegation artifact reuse is limited to 8 artifacts")
+    return reusable_ids
+
+
+def _validated_reused_artifacts(
+    store: SubagentStore,
+    reusable_ids: tuple[str, ...],
+    *,
+    reuse_approved: bool,
+) -> list[dict[str, Any]]:
+    if reusable_ids and not reuse_approved:
+        raise ValueError("cross-delegation artifact reuse requires explicit approval")
+    return [store.artifact(artifact_id, include_content=False, require_valid_content=True) for artifact_id in reusable_ids]
 
 
 def _artifact_graph(artifacts: list[dict[str, Any]], *, reused_artifacts: list[dict[str, Any]]) -> dict[str, list[dict[str, str]]]:

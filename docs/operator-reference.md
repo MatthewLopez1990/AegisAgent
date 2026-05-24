@@ -198,6 +198,7 @@ aegis agents profiles
 aegis agents contracts
 aegis agents delegate "review the current plan"
 aegis agents delegate "continue from artifact" --use-artifact <artifact-id> --approved
+aegis agents bg "continue from artifact" --use-artifact <artifact-id> --approved
 aegis agents artifacts
 aegis agents artifacts show <artifact-id>
 aegis agents artifacts search "final synthesis"
@@ -205,6 +206,7 @@ aegis agents synthesis <root-id>
 aegis agents graph <root-id>
 aegis subagents --delegate "review the current plan"
 aegis subagents --delegate "continue from artifact" --use-artifact <artifact-id> --approved
+aegis subagents --background "continue from artifact" --use-artifact <artifact-id> --approved
 aegis subagents --synthesis <root-id>
 aegis subagents --artifact-graph <root-id>
 ```
@@ -219,6 +221,11 @@ groups, limits, approval escalation, and receipt fields. These budgets narrow
 role intent and audit expectations, with artifact cap and safety checks recorded
 fail-closed; file, git, browser, connector, memory, and external-state mutations
 still require the existing typed approval path.
+
+Background artifact reuse persists approved artifact ids in the job record and
+revalidates them when the job runs. It does not permit unapproved detached-job
+reuse, unsandboxed tools, connector delivery, browser launch, or raw artifact-body
+model reuse.
 
 ## Memory Review
 

@@ -248,6 +248,7 @@ aegis agents artifacts
 aegis agents artifacts show <artifact-id>
 aegis agents artifacts search "Checkpoint plan"
 aegis agents delegate "continue from this prior artifact" --use-artifact <artifact-id> --approved
+aegis agents bg "continue from this prior artifact" --use-artifact <artifact-id> --approved
 aegis model usage
 ```
 
@@ -273,14 +274,18 @@ approval:
 
 ```bash
 aegis agents delegate "continue from this prior artifact" --use-artifact <artifact-id> --approved
+aegis agents bg "continue from this prior artifact" --use-artifact <artifact-id> --approved
 aegis subagents --delegate "continue from this prior artifact" --use-artifact <artifact-id> --approved
+aegis subagents --background "continue from this prior artifact" --use-artifact <artifact-id> --approved
 ```
 
 In the terminal UI, use the same approval style as other gated actions:
 
 ```text
 /agents delegate continue from this prior artifact | use-artifact <artifact-id> | approve
+/agents bg continue from this prior artifact | use-artifact <artifact-id> | approve
 /subagents continue from this prior artifact | use-artifact <artifact-id> | approve
+/subagents bg continue from this prior artifact | use-artifact <artifact-id> | approve
 ```
 
 Aegis records reused artifact ids in session metadata and audit receipts, then
@@ -289,6 +294,9 @@ workers. Each completed delegation also writes a coordinator `final_synthesis`
 artifact that merges planner, researcher, implementer, reviewer, and approved
 reused artifact metadata over the artifact graph. Reuse still sends summary
 metadata only; artifact bodies are not sent as model context by reuse.
+Background artifact reuse persists approved artifact ids in the job record and
+revalidates them when the job runs. It does not permit unapproved detached-job
+reuse, connector delivery, browser launch, or raw artifact-body model reuse.
 
 ## Common Commands
 
@@ -429,8 +437,8 @@ review controls, passive skill trust metadata, and local agent/subagent
 orchestration with provider fallback metadata, durable role artifacts,
 artifact list/show/search, structured role-specific tool budget policies,
 stage-to-stage handoff metadata, approval-gated reuse of selected prior artifacts
-as bounded summary context, and coordinator final synthesis over artifact
-graphs.
+as bounded summary context, approval-gated detached-job artifact reuse, and
+coordinator final synthesis over artifact graphs.
 
 Partial: web console parity, live connectors, self-improvement, richer browser
 automation, multi-provider fallback ordering, subscription bridge readiness,

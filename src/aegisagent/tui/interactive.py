@@ -215,7 +215,7 @@ SLASH_COMMANDS: tuple[tuple[str, str], ...] = (
     ("/subagents synthesis", "show coordinator final synthesis for a root delegation"),
     ("/subagents graph", "show coordinator artifact graph for a root delegation"),
     ("/subagents live", "delegate and stream local worker progress; add | use-artifact <id> | approve to reuse approved context"),
-    ("/subagents bg", "start background subagent work and keep composer usable"),
+    ("/subagents bg", "start background subagent work; add | use-artifact <id> | approve to reuse approved context"),
     ("/subagents monitor", "live repaint background subagent job progress"),
     ("/subagents unwatch", "stop the active subagent job monitor"),
     ("/subagents recover", "mark stale background subagent jobs failed"),
@@ -230,7 +230,7 @@ SLASH_COMMANDS: tuple[tuple[str, str], ...] = (
     ("/agents graph", "show coordinator artifact graph for a root delegation"),
     ("/agents live", "delegate and stream Hermes-style local agent progress; add | use-artifact <id> | approve to reuse approved context"),
     ("/agents stream", "alias for /agents live"),
-    ("/agents bg", "start background agent work and keep composer usable"),
+    ("/agents bg", "start background agent work; add | use-artifact <id> | approve to reuse approved context"),
     ("/agents jobs", "list background agent jobs"),
     ("/agents monitor", "live repaint background agent job progress"),
     ("/agents unwatch", "stop the active agent job monitor"),
@@ -419,6 +419,7 @@ COMMAND_MENU_GROUPS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
             ("/subagents live <task>", "delegate and stream bounded workers"),
             ("/subagents live <task> | use-artifact <id> | approve", "delegate and stream bounded workers with approved prior context"),
             ("/subagents bg <task>", "start background subagent work"),
+            ("/subagents bg <task> | use-artifact <id> | approve", "start background subagent work with approved prior context"),
             ("/subagents monitor <job-id>", "live repaint background subagent progress"),
             ("/subagents unwatch", "stop active subagent job monitor"),
             ("/subagents recover", "recover stale background subagent jobs"),
@@ -431,8 +432,15 @@ COMMAND_MENU_GROUPS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
             ("/agents artifacts search <query>", "search durable role artifacts"),
             ("/agents synthesis <root-id>", "show coordinator final synthesis"),
             ("/agents graph <root-id>", "show coordinator artifact graph"),
+            ("/agents live <task>", "stream Hermes-style role-worker progress"),
+            ("/agents live <task> | use-artifact <id> | approve", "stream agents with approved prior context"),
+            ("/agents stream <task>", "alias for /agents live <task>"),
             ("/agents bg <task>", "start background agent work"),
+            ("/agents bg <task> | use-artifact <id> | approve", "start background agent work with approved prior context"),
+            ("/agents jobs", "list background agent jobs"),
             ("/agents monitor <job-id>", "live repaint background agent progress"),
+            ("/agents unwatch", "stop active agent job monitor"),
+            ("/agents recover", "recover stale background agent jobs"),
             ("/dashboard", "show terminal operator posture"),
             ("/capabilities", "show terminal-visible parity map"),
             ("/automations create <name> | <schedule> | <prompt>", "persist a gated schedule record"),
@@ -536,6 +544,7 @@ def build_interactive_panels(paths: RuntimePaths, *, active_menu: str | None = N
             InteractiveItem("Start setup", "Walk model, secrets, sandbox, tools, and checks.", "/setup", "next"),
             InteractiveItem("Command lanes", "Browse Hermes-style terminal commands by group or prefix.", "/commands", "map"),
             InteractiveItem("Agent contracts", "Review planner, researcher, implementer, reviewer scopes.", "/agents contracts", "bounded"),
+            InteractiveItem("Agents live/bg", "Use /agents live <task>; /agents bg <task>; /agents monitor <job-id>.", "/commands agents", "ready"),
             InteractiveItem("Plain prompt", "Type a request; Aegis answers through the local terminal provider.", "", "safe"),
             InteractiveItem("Policy check", "Try /policy shell rg --files.", "/policy shell rg --files", "allow"),
             InteractiveItem("Audit verify", "Check the receipt hash chain.", "/audit", "ready"),
@@ -1080,6 +1089,11 @@ def _parse_artifact_reuse_directive(raw: str) -> tuple[str, list[str], bool]:
 def _delegate_with_reuse(orchestrator: LocalSubagentOrchestrator, task: str) -> Any:
     prompt, artifact_ids, approved = _parse_artifact_reuse_directive(task)
     return orchestrator.delegate(prompt, reusable_artifact_ids=artifact_ids, reuse_approved=approved)
+
+
+def _start_background_with_reuse(orchestrator: LocalSubagentOrchestrator, task: str) -> Any:
+    prompt, artifact_ids, approved = _parse_artifact_reuse_directive(task)
+    return orchestrator.start_background(prompt, reusable_artifact_ids=artifact_ids, reuse_approved=approved)
 
 
 def dispatch_interactive_command(command: str, paths: RuntimePaths) -> str:
@@ -1827,7 +1841,11 @@ def dispatch_interactive_command(command: str, paths: RuntimePaths) -> str:
             print(format_artifact_search(query, rows))
         elif task.startswith("bg ") or task.startswith("background "):
             job_task = task.split(maxsplit=1)[1] if " " in task else ""
-            record = orchestrator.start_background(job_task)
+            try:
+                record = _start_background_with_reuse(orchestrator, job_task)
+            except (KeyError, ValueError) as exc:
+                print(f"Background delegation blocked: {exc}")
+                return "subagents"
             print(format_background_job(record))
             print("")
             print(f"monitor: /subagents monitor {record.id}")
@@ -1866,7 +1884,7 @@ def dispatch_interactive_command(command: str, paths: RuntimePaths) -> str:
         elif task in {"", "list"}:
             print(format_subagent_records(SubagentStore(paths).list()))
             print("")
-            print("usage: /subagents <task> | /subagents artifacts | /subagents artifacts show <artifact-id> | /subagents artifacts search <query> | /subagents live <task> | /subagents bg <task> | /subagents jobs | /subagents job <job-id> | /subagents monitor <job-id> | /subagents unwatch | /subagents cancel <job-id>")
+            print("usage: /subagents <task> | /subagents artifacts | /subagents artifacts show <artifact-id> | /subagents artifacts search <query> | /subagents live <task> | /subagents bg <task> | use-artifact <id> | approve | /subagents jobs | /subagents job <job-id> | /subagents monitor <job-id> | /subagents unwatch | /subagents cancel <job-id>")
         else:
             if task.startswith("delegate "):
                 task = task.removeprefix("delegate ").strip()
@@ -1931,7 +1949,11 @@ def dispatch_interactive_command(command: str, paths: RuntimePaths) -> str:
             print(format_artifact_search(query, rows).replace("SUBAGENT ARTIFACT SEARCH", "AGENT ARTIFACT SEARCH", 1))
         elif task.startswith("bg ") or task.startswith("background "):
             job_task = task.split(maxsplit=1)[1] if " " in task else ""
-            record = orchestrator.start_background(job_task)
+            try:
+                record = _start_background_with_reuse(orchestrator, job_task)
+            except (KeyError, ValueError) as exc:
+                print(f"Background delegation blocked: {exc}")
+                return "agents"
             print(format_background_job(record).replace("SUBAGENT BACKGROUND JOB", "AGENT BACKGROUND JOB", 1))
             print("")
             print(f"monitor: /agents monitor {record.id}")

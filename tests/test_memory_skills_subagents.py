@@ -601,6 +601,47 @@ class MemorySkillsSubagentTests(unittest.TestCase):
             receipt_types = [receipt["event_type"] for receipt in AuditLog(paths).recent(3)]
             self.assertIn("subagent.background.completed", receipt_types)
 
+    def test_background_job_reuses_approved_artifacts_at_run_boundary(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = runtime_paths(tmp)
+            first = LocalSubagentOrchestrator(paths).delegate("seed reusable background context")
+            planner_artifact = next(worker.artifacts[0]["id"] for worker in first.workers if worker.role == "planner")
+
+            with self.assertRaisesRegex(ValueError, "requires explicit approval"):
+                LocalSubagentOrchestrator(paths).start_background("background from prior", reusable_artifact_ids=[planner_artifact])
+
+            blocked_audit = (paths.state_dir / "audit.jsonl").read_text(encoding="utf-8")
+            self.assertEqual(blocked_audit.count("subagent.artifacts.reused"), 0)
+
+            job = BackgroundJobStore(paths).create(
+                "background from prior",
+                reusable_artifact_ids=[planner_artifact],
+                reuse_approved=True,
+            )
+            result = LocalSubagentOrchestrator(paths).run_background_job(job.id)
+
+            self.assertEqual(result.status, "completed")
+            self.assertEqual(result.reusable_artifact_ids, [planner_artifact])
+            self.assertTrue(result.artifact_reuse_approved)
+            root = SubagentStore(paths).get(result.root_id)
+            self.assertEqual(root.input_artifacts, [planner_artifact])
+            workers = [SubagentStore(paths).get(child_id) for child_id in root.children]
+            self.assertTrue(all(worker.input_artifacts[0] == planner_artifact for worker in workers))
+            self.assertIn("reuse     1 approved artifacts", format_background_job(result))
+            self.assertIn(" 1      background from prior", format_background_jobs(BackgroundJobStore(paths).list()))
+
+            audit_rows = [json.loads(line) for line in (paths.state_dir / "audit.jsonl").read_text(encoding="utf-8").splitlines() if line.strip()]
+            reuse_receipt = next(row for row in audit_rows if row["event_type"] == "subagent.artifacts.reused")
+            self.assertEqual(reuse_receipt["payload"]["artifact_ids"], [planner_artifact])
+            self.assertFalse(reuse_receipt["payload"]["browser_auto_launch"])
+            self.assertFalse(reuse_receipt["payload"]["external_action_started"])
+            self.assertFalse(reuse_receipt["payload"]["raw_secret_values_included"])
+            self.assertFalse(reuse_receipt["payload"]["model_invocation_performed"])
+            completed = next(row for row in reversed(audit_rows) if row["event_type"] == "subagent.background.completed")
+            self.assertEqual(completed["payload"]["reusable_artifact_ids"], [planner_artifact])
+            self.assertTrue(completed["payload"]["artifact_reuse_approved"])
+            self.assertFalse(completed["payload"]["browser_auto_launch"])
+
     def test_background_job_cancel_updates_persisted_status(self):
         with tempfile.TemporaryDirectory() as tmp:
             paths = runtime_paths(tmp)

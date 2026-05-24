@@ -2195,6 +2195,15 @@ class CliTests(unittest.TestCase):
             jobs = run_cli("agents", "jobs", cwd=tmp)
             self.assertIn(job_id, jobs.stdout)
 
+            blocked_bg = run_cli("agents", "bg", "background from prior", "--use-artifact", planner_artifact, cwd=tmp, extra_env={"AEGISAGENT_BACKGROUND_NO_SPAWN": "1"})
+            self.assertEqual(blocked_bg.returncode, 2)
+            self.assertIn("requires explicit approval", blocked_bg.stderr)
+            approved_bg = run_cli("agents", "bg", "background from prior", "--use-artifact", planner_artifact, "--approved", cwd=tmp, extra_env={"AEGISAGENT_BACKGROUND_NO_SPAWN": "1"})
+            self.assertEqual(approved_bg.returncode, 0, approved_bg.stderr)
+            approved_bg_payload = json.loads(approved_bg.stdout)
+            self.assertEqual(approved_bg_payload["reusable_artifact_ids"], [planner_artifact])
+            self.assertTrue(approved_bg_payload["artifact_reuse_approved"])
+
     def test_capabilities_surface_shows_terminal_parity_and_gaps(self):
         with tempfile.TemporaryDirectory() as tmp:
             status = run_cli("capabilities", cwd=tmp, extra_env={"AEGIS_COMMAND_NAME": "aegis-test"})
@@ -2730,6 +2739,33 @@ class CliTests(unittest.TestCase):
             jobs = run_cli("subagents", "--jobs", cwd=tmp)
             self.assertEqual(jobs.returncode, 0, jobs.stderr)
             self.assertTrue(json.loads(jobs.stdout)["jobs"])
+
+            seed = run_cli("subagents", "--delegate", "seed background artifact", cwd=tmp)
+            self.assertEqual(seed.returncode, 0, seed.stderr)
+            planner_artifact = next(worker["artifacts"][0]["id"] for worker in json.loads(seed.stdout)["workers"] if worker["role"] == "planner")
+            blocked = run_cli("subagents", "--background", "continue background", "--use-artifact", planner_artifact, cwd=tmp, extra_env={"AEGISAGENT_BACKGROUND_NO_SPAWN": "1"})
+            self.assertEqual(blocked.returncode, 2)
+            self.assertIn("requires explicit approval", blocked.stderr)
+
+            queued = run_cli("subagents", "--background", "continue background", "--use-artifact", planner_artifact, "--approved", cwd=tmp, extra_env={"AEGISAGENT_BACKGROUND_NO_SPAWN": "1"})
+            self.assertEqual(queued.returncode, 0, queued.stderr)
+            queued_payload = json.loads(queued.stdout)
+            self.assertEqual(queued_payload["reusable_artifact_ids"], [planner_artifact])
+            self.assertTrue(queued_payload["artifact_reuse_approved"])
+            reuse_job_id = queued_payload["id"]
+            reuse_run = run_cli("subagents", "--run-job", reuse_job_id, cwd=tmp)
+            self.assertEqual(reuse_run.returncode, 0, reuse_run.stderr)
+            reuse_payload = json.loads(reuse_run.stdout)
+            self.assertEqual(reuse_payload["status"], "completed")
+            self.assertEqual(reuse_payload["reusable_artifact_ids"], [planner_artifact])
+            reuse_job = run_cli("subagents", "--job", reuse_job_id, cwd=tmp)
+            self.assertEqual(json.loads(reuse_job.stdout)["reusable_artifact_ids"], [planner_artifact])
+            audit = (Path(tmp) / ".aegisagent" / "audit.jsonl").read_text(encoding="utf-8")
+            self.assertIn("subagent.artifacts.reused", audit)
+            self.assertIn("subagent.background.completed", audit)
+            self.assertIn('"content_included": false', audit)
+            self.assertIn('"browser_auto_launch": false', audit)
+            self.assertNotIn("browser.session.open", audit)
 
     def test_subagents_background_job_can_be_cancelled(self):
         with tempfile.TemporaryDirectory() as tmp:

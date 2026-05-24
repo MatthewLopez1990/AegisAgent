@@ -271,13 +271,13 @@ def build_parser() -> argparse.ArgumentParser:
     subagents.add_argument("--artifact-search", metavar="QUERY", help="Search durable subagent role artifacts.")
     subagents.add_argument("--synthesis", metavar="ROOT_ID", help="Show coordinator final synthesis for a root delegation id.")
     subagents.add_argument("--artifact-graph", metavar="ROOT_ID", help="Show coordinator artifact graph for a root delegation id.")
-    subagents.add_argument("--use-artifact", action="append", default=[], help="Approved prior artifact id to reuse as starting context for --delegate or --stream.")
+    subagents.add_argument("--use-artifact", action="append", default=[], help="Approved prior artifact id to reuse as starting context for --delegate, --stream, or --background.")
     subagents.add_argument("--approved", action="store_true", help="Approve cross-delegation artifact reuse.")
 
     agents = sub.add_parser("agents", help="Hermes-style agent surface backed by governed local subagents.")
     agents.add_argument("agent_command", nargs="?", default="status", choices=["status", "profiles", "contracts", "delegate", "stream", "background", "bg", "jobs", "job", "monitor", "cancel", "recover", "artifacts", "artifact", "search-artifacts", "synthesis", "graph"], help="Agent command to run.")
     agents.add_argument("agent_args", nargs="*", help="Task text, job id, or root id for the selected agent command.")
-    agents.add_argument("--use-artifact", action="append", default=[], help="Approved prior artifact id to reuse as starting context for delegate or stream.")
+    agents.add_argument("--use-artifact", action="append", default=[], help="Approved prior artifact id to reuse as starting context for delegate, stream, or background.")
     agents.add_argument("--approved", action="store_true", help="Approve cross-delegation artifact reuse.")
     agents.add_argument("--json", action="store_true", default=argparse.SUPPRESS, help="Emit JSON for status, profiles, and artifact browsing.")
 
@@ -1141,9 +1141,10 @@ def main(argv: list[str] | None = None) -> int:
             print("")
             print(json.dumps({"root_id": result.root.id, "receipt_id": result.receipt_id, "status": result.root.status}, indent=2))
         elif args.background:
-            if args.use_artifact:
-                parser.error("--use-artifact is only supported for --delegate and --stream")
-            record = orchestrator.start_background(args.background)
+            try:
+                record = orchestrator.start_background(args.background, reusable_artifact_ids=args.use_artifact, reuse_approved=args.approved)
+            except (KeyError, ValueError) as exc:
+                parser.error(str(exc))
             print(json.dumps(record.to_dict(), indent=2))
         elif args.run_job:
             record = orchestrator.run_background_job(args.run_job)
@@ -1255,9 +1256,11 @@ def main(argv: list[str] | None = None) -> int:
         elif command in {"background", "bg"}:
             if not agent_args:
                 parser.error(f"agents {command} requires a task")
-            if args.use_artifact:
-                parser.error("--use-artifact is only supported for agents delegate and agents stream")
-            print(json.dumps(orchestrator.start_background(agent_args).to_dict(), indent=2))
+            try:
+                record = orchestrator.start_background(agent_args, reusable_artifact_ids=args.use_artifact, reuse_approved=args.approved)
+            except (KeyError, ValueError) as exc:
+                parser.error(str(exc))
+            print(json.dumps(record.to_dict(), indent=2))
         elif command == "jobs":
             print(json.dumps({"jobs": orchestrator.background_jobs()}, indent=2))
         elif command in {"job", "monitor"}:

@@ -14,7 +14,7 @@ from aegisagent.config import runtime_paths
 from aegisagent.core.memory import MemoryStore
 from aegisagent.core.setup_state import setup_wizard_preferences
 from aegisagent.core.skills import SkillLoader
-from aegisagent.core.subagents import BackgroundJobStore, SubagentStore
+from aegisagent.core.subagents import BackgroundJobStore, LocalSubagentOrchestrator, SubagentStore
 from aegisagent.core.tasks import TaskRunner, TaskStore
 from aegisagent.tui.interactive import SLASH_COMMANDS, _CursesAegisAgent, build_interactive_panels, dispatch_interactive_command, normalize_interactive_command, slash_palette_candidates
 from aegisagent.tui.renderer import TuiState, render
@@ -35,14 +35,17 @@ class TuiRendererTests(unittest.TestCase):
         self.assertIn("First launch: setup is open; composer is live.", output)
         self.assertIn("Next: /setup next -> /setup run-checks -> /setup first-task", output)
         self.assertIn("Web stays optional and off until explicitly approved.", output)
-        self.assertIn("provider   local fallback", output)
+        self.assertIn("provider   local; /model doctor", output)
         self.assertIn("budgets    planner=8 researcher=12", output)
         self.assertIn("implementer=16 reviewer=10", output)
+        self.assertIn("agents     /agents live | /agents bg", output)
+        self.assertIn("monitor    /agents monitor <job>", output)
         self.assertIn("approval   none pending", output)
         self.assertIn("Enter send | / commands | Tab complete", output)
         self.assertIn("120x40 ready", output)
         self.assertNotIn("openai/gpt-5.5 verified", output)
         self.assertNotIn("audit=8f31c2", output)
+        self.assertNotIn("/mode.", output)
 
     def test_activation_view_and_command_are_browser_off(self):
         output = render(TuiState(view="activation"), width=100, height=32)
@@ -160,8 +163,12 @@ class TuiRendererTests(unittest.TestCase):
         self.assertIn("/dashboard", commands)
         self.assertIn("/commands", commands)
         self.assertIn("/agents contracts", commands)
+        self.assertIn("/commands agents", commands)
         self.assertIn("/audit", commands)
         self.assertIn("/web", commands)
+        focus = next(panel for panel in panels if panel.panel_id == "focus")
+        self.assertTrue(any(item.label == "Agents live/bg" for item in focus.items))
+        self.assertTrue(any("/agents monitor <job-id>" in item.detail for item in focus.items))
 
     def test_setup_panel_has_first_launch_wizard_controls(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -415,6 +422,26 @@ class TuiRendererTests(unittest.TestCase):
             self.assertIn("browser_auto_launch=false", output.getvalue())
             self.assertIn("/git status", output.getvalue())
             self.assertIn("/git diff", output.getvalue())
+
+            agents_output = io.StringIO()
+            with contextlib.redirect_stdout(agents_output):
+                result = dispatch_interactive_command("/commands agents", paths)
+
+            self.assertEqual(result, "commands")
+            agents_text = agents_output.getvalue()
+            for marker in (
+                "/agents live <task>",
+                "/agents live <task> | use-artifact <id> | approve",
+                "/agents stream <task>",
+                "/agents bg <task>",
+                "/agents bg <task> | use-artifact <id> | approve",
+                "/agents jobs",
+                "/agents monitor <job-id>",
+                "/agents unwatch",
+                "/agents recover",
+                "browser_auto_launch=false",
+            ):
+                self.assertIn(marker, agents_text)
 
             json_output = io.StringIO()
             with contextlib.redirect_stdout(json_output):
@@ -1581,6 +1608,20 @@ class TuiRendererTests(unittest.TestCase):
             self.assertIn("AGENT BACKGROUND JOB", background.getvalue())
             self.assertIn("monitor: /agents monitor", background.getvalue())
 
+            blocked_bg = io.StringIO()
+            with patch.dict("os.environ", {"AEGISAGENT_BACKGROUND_NO_SPAWN": "1"}), contextlib.redirect_stdout(blocked_bg):
+                result = dispatch_interactive_command(f"/agents bg continue from prior | use-artifact {planner_artifact}", paths)
+
+            self.assertEqual(result, "agents")
+            self.assertIn("requires explicit approval", blocked_bg.getvalue())
+            approved_bg = io.StringIO()
+            with patch.dict("os.environ", {"AEGISAGENT_BACKGROUND_NO_SPAWN": "1"}), contextlib.redirect_stdout(approved_bg):
+                result = dispatch_interactive_command(f"/agents bg continue from prior | use-artifact {planner_artifact} | approve", paths)
+
+            self.assertEqual(result, "agents")
+            self.assertIn("AGENT BACKGROUND JOB", approved_bg.getvalue())
+            self.assertIn("reuse     1 approved artifacts", approved_bg.getvalue())
+
     def test_interactive_dispatch_capabilities_surface(self):
         with tempfile.TemporaryDirectory() as tmp:
             paths = runtime_paths(tmp)
@@ -2008,6 +2049,22 @@ class TuiRendererTests(unittest.TestCase):
             with contextlib.redirect_stdout(unwatch):
                 dispatch_interactive_command("/subagents unwatch", paths)
             self.assertIn("stops the nonblocking subagent monitor", unwatch.getvalue())
+
+            seed = LocalSubagentOrchestrator(paths).delegate("seed tui background artifact")
+            planner_artifact = next(worker.artifacts[0]["id"] for worker in seed.workers if worker.role == "planner")
+            blocked = io.StringIO()
+            with patch.dict("os.environ", {"AEGISAGENT_BACKGROUND_NO_SPAWN": "1"}), contextlib.redirect_stdout(blocked):
+                result = dispatch_interactive_command(f"/subagents bg continue from prior | use-artifact {planner_artifact}", paths)
+
+            self.assertEqual(result, "subagents")
+            self.assertIn("requires explicit approval", blocked.getvalue())
+            approved = io.StringIO()
+            with patch.dict("os.environ", {"AEGISAGENT_BACKGROUND_NO_SPAWN": "1"}), contextlib.redirect_stdout(approved):
+                result = dispatch_interactive_command(f"/subagents bg continue from prior | use-artifact {planner_artifact} | approve", paths)
+
+            self.assertEqual(result, "subagents")
+            self.assertIn("SUBAGENT BACKGROUND JOB", approved.getvalue())
+            self.assertIn("reuse     1 approved artifacts", approved.getvalue())
 
     def test_interactive_dispatch_recovers_stale_subagent_jobs(self):
         with tempfile.TemporaryDirectory() as tmp:
