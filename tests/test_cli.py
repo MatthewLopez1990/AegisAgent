@@ -121,6 +121,7 @@ class CliTests(unittest.TestCase):
         self.assertIn("git --version", readme)
         self.assertIn("command -v aegis", readme)
         self.assertIn("aegis activation", readme)
+        self.assertIn("aegis tui", readme[start_index:update_index])
         self.assertIn("aegis setup next", readme[start_index:update_index])
         self.assertIn("aegis setup model", readme[start_index:update_index])
         self.assertIn("aegis setup --run-checks", readme[start_index:update_index])
@@ -129,9 +130,14 @@ class CliTests(unittest.TestCase):
         self.assertIn("aegis", readme[install_index:start_index])
         self.assertIn("setup wizard", readme[start_index:update_index])
         self.assertIn("/setup next", readme[start_index:update_index])
+        self.assertIn("/setup first-task", readme[start_index:update_index])
         self.assertIn("/setup hide", readme[start_index:update_index])
         self.assertIn("/setup reset", readme[start_index:update_index])
         self.assertIn("| approve", readme[start_index:update_index])
+        self.assertIn("Aegis-Agent", readme[:install_index])
+        self.assertIn("aegis setup model-auth", readme)
+        self.assertIn("aegis setup connections", readme)
+        self.assertIn("aegis setup verify", readme)
         self.assertIn("does not launch a browser", readme)
         self.assertIn("[docs/operator-reference.md](docs/operator-reference.md)", readme)
 
@@ -452,6 +458,8 @@ class CliTests(unittest.TestCase):
                 self.assertIn(marker, result.stdout)
                 for token in ("setup", "tui", "web", "tasks", "agents", "completion"):
                     self.assertIn(token, result.stdout)
+                for token in ("model-auth", "connections", "skills", "plugins", "check", "checks", "verify", "doctor", "init", "first-task", "--init"):
+                    self.assertIn(token, result.stdout)
                 self.assertIn("--workspace", result.stdout)
                 self.assertNotIn("OPENAI_API_KEY=", result.stdout)
                 self.assertNotIn("SLACK_BOT_TOKEN=", result.stdout)
@@ -597,6 +605,55 @@ class CliTests(unittest.TestCase):
         self.assertEqual(payload["priority_step"]["id"], "model")
         self.assertEqual(payload["priority_step"]["command"], "/setup model")
         self.assertEqual(payload["priority_step"]["cli_command"], "aegis-test setup model")
+
+    def test_setup_compatibility_aliases_are_terminal_only(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            for alias in ("check", "checks", "verify", "doctor"):
+                with self.subTest(alias=alias):
+                    result = run_cli("setup", alias, cwd=tmp)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    payload = json.loads(result.stdout)
+                    self.assertTrue(payload["metadata_only"])
+                    self.assertFalse(payload["browser_auto_launch"])
+                    self.assertFalse(payload["gateway_started"])
+                    self.assertFalse(payload["external_action_started"])
+
+            model_auth = run_cli("setup", "model-auth", cwd=tmp)
+            connections = run_cli("setup", "connections", cwd=tmp)
+            skills = run_cli("setup", "skills", cwd=tmp)
+            plugins = run_cli("setup", "plugins", cwd=tmp)
+            first_task = run_cli("setup", "first-task", cwd=tmp)
+            init_section = run_cli("setup", "init", cwd=tmp)
+            init = run_cli("setup", "--init", cwd=tmp)
+
+        self.assertEqual(model_auth.returncode, 0, model_auth.stderr)
+        self.assertIn("AEGIS SETUP :: model", model_auth.stdout)
+        self.assertIn("browser_auto_launch: false", model_auth.stdout)
+        self.assertEqual(connections.returncode, 0, connections.stderr)
+        self.assertIn("AEGIS SETUP :: connectors", connections.stdout)
+        self.assertIn("browser_auto_launch: false", connections.stdout)
+        self.assertEqual(skills.returncode, 0, skills.stderr)
+        self.assertIn("AEGIS SETUP :: memory", skills.stdout)
+        self.assertIn("browser_auto_launch: false", skills.stdout)
+        self.assertEqual(plugins.returncode, 0, plugins.stderr)
+        self.assertIn("AEGIS SETUP :: memory", plugins.stdout)
+        self.assertEqual(first_task.returncode, 0, first_task.stderr)
+        self.assertIn("AEGIS SETUP FIRST TASK", first_task.stdout)
+        self.assertIn("browser_auto_launch: false", first_task.stdout)
+        self.assertEqual(init_section.returncode, 0, init_section.stderr)
+        self.assertIn("AEGIS SETUP QUICKSTART", init_section.stdout)
+        self.assertIn("No browser is launched by setup", init_section.stdout)
+        self.assertEqual(init.returncode, 0, init.stderr)
+        self.assertIn("AEGIS SETUP QUICKSTART", init.stdout)
+        self.assertIn("No browser is launched by setup", init.stdout)
+
+    def test_setup_rejects_unknown_alias_without_runtime_side_effects(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = run_cli("setup", "backends", cwd=tmp)
+
+            self.assertEqual(result.returncode, 2)
+            self.assertIn("invalid choice", result.stderr)
+            self.assertFalse((Path(tmp) / ".aegisagent").exists())
 
     def test_install_status_and_shim_are_terminal_only(self):
         with tempfile.TemporaryDirectory() as tmp:

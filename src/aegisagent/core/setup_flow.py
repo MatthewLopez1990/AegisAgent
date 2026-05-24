@@ -17,6 +17,18 @@ from aegisagent.security.sandbox import detect_sandbox
 
 
 SETUP_SECTIONS = ("model", "secrets", "sandbox", "tools", "connectors", "memory")
+SETUP_ALIASES = {
+    "model-auth": "model",
+    "connections": "connectors",
+    "skills": "memory",
+    "plugins": "memory",
+    "check": "run-checks",
+    "checks": "run-checks",
+    "verify": "run-checks",
+    "doctor": "run-checks",
+    "init": "quickstart",
+}
+SETUP_SECTION_CHOICES = (*SETUP_SECTIONS, "next", "first-task", *SETUP_ALIASES)
 SETUP_NEXT_SECTION_COUNT = len(SETUP_SECTIONS)
 
 
@@ -277,6 +289,32 @@ class SetupGuide:
             )
         raise KeyError(f"unknown setup section: {name}")
 
+    def first_task_payload(self) -> dict[str, Any]:
+        command = terminal_command_name()
+        return {
+            "title": "AEGIS SETUP FIRST TASK",
+            "workspace": str(self.paths.workspace),
+            "status": "ready",
+            "terminal_first": True,
+            "browser_required": False,
+            "browser_auto_launch": False,
+            "gateway_started": False,
+            "external_action_started": False,
+            "model_invocation_performed": False,
+            "raw_secret_values_included": False,
+            "examples": [
+                f"{command} chat \"summarize this workspace\"",
+                "read file README.md",
+                "git status",
+                "/subagents live review the current plan",
+            ],
+            "next": [
+                f"Run `{command}` or `{command} tui` to use the live terminal composer.",
+                "Use `/commands` inside the TUI for command lanes.",
+                "Use `/setup run-checks` before configuring external routes.",
+            ],
+        }
+
     def run_checks(self) -> dict[str, Any]:
         indexed = MemoryStore(self.paths).index_curated_files()
         provider = ProviderStore(self.paths).doctor()
@@ -358,6 +396,35 @@ def format_setup_section(section: SetupSection) -> str:
     return "\n".join(lines)
 
 
+def format_setup_first_task(payload: dict[str, Any]) -> str:
+    lines = [
+        str(payload["title"]),
+        f"workspace   {payload['workspace']}",
+        f"status      {payload['status']}",
+        "",
+        "Try one safe terminal task. It uses the local terminal provider, audited typed tools, and no browser launch.",
+        "",
+        "examples",
+    ]
+    lines.extend(f"- {example}" for example in payload["examples"])
+    lines.extend(
+        [
+            "",
+            "safety",
+            f"- terminal_first: {str(payload['terminal_first']).lower()}",
+            f"- browser_required: {str(payload['browser_required']).lower()}",
+            f"- browser_auto_launch: {str(payload['browser_auto_launch']).lower()}",
+            f"- gateway_started: {str(payload['gateway_started']).lower()}",
+            f"- external_action_started: {str(payload['external_action_started']).lower()}",
+            f"- raw_secret_values_included: {str(payload['raw_secret_values_included']).lower()}",
+            "",
+            "next",
+        ]
+    )
+    lines.extend(f"- {item}" for item in payload["next"])
+    return "\n".join(lines)
+
+
 def format_setup_next(priority: SetupPriority | dict[str, Any]) -> str:
     data = priority.to_dict() if isinstance(priority, SetupPriority) else priority
     lines = [
@@ -383,3 +450,8 @@ def format_setup_next(priority: SetupPriority | dict[str, Any]) -> str:
         "- Use `/setup hide` when you want the setup wizard out of the default TUI.",
     ]
     return "\n".join(lines)
+
+
+def normalize_setup_section(section: str | None) -> str:
+    raw = (section or "").strip()
+    return SETUP_ALIASES.get(raw, raw)

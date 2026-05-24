@@ -294,12 +294,25 @@ class TuiRendererTests(unittest.TestCase):
         self.assertTrue(any(command == "/tasks recover" for command, _detail in recover_matches))
         setup_model_matches = slash_palette_candidates("/setup m")
         self.assertTrue(any(command == "/setup model" for command, _detail in setup_model_matches))
+        setup_model_auth_matches = slash_palette_candidates("/setup model-a")
+        self.assertTrue(any(command == "/setup model-auth" for command, _detail in setup_model_auth_matches))
         setup_next_matches = slash_palette_candidates("/setup n")
         self.assertTrue(any(command == "/setup next" for command, _detail in setup_next_matches))
         setup_sandbox_matches = slash_palette_candidates("/setup sa")
         self.assertTrue(any(command == "/setup sandbox" for command, _detail in setup_sandbox_matches))
         setup_connectors_matches = slash_palette_candidates("/setup c")
         self.assertTrue(any(command == "/setup connectors" for command, _detail in setup_connectors_matches))
+        setup_connections_matches = slash_palette_candidates("/setup conne")
+        self.assertTrue(any(command == "/setup connections" for command, _detail in setup_connections_matches))
+        setup_check_matches = slash_palette_candidates("/setup ch")
+        self.assertTrue(any(command == "/setup check" for command, _detail in setup_check_matches))
+        self.assertTrue(any(command == "/setup checks" for command, _detail in setup_check_matches))
+        setup_verify_matches = slash_palette_candidates("/setup v")
+        self.assertTrue(any(command == "/setup verify" for command, _detail in setup_verify_matches))
+        setup_doctor_matches = slash_palette_candidates("/setup d")
+        self.assertTrue(any(command == "/setup doctor" for command, _detail in setup_doctor_matches))
+        setup_skills_matches = slash_palette_candidates("/setup sk")
+        self.assertTrue(any(command == "/setup skills" for command, _detail in setup_skills_matches))
         setup_first_task_matches = slash_palette_candidates("/setup f")
         self.assertTrue(any(command == "/setup first-task" for command, _detail in setup_first_task_matches))
         setup_hide_matches = slash_palette_candidates("/setup h")
@@ -308,6 +321,20 @@ class TuiRendererTests(unittest.TestCase):
         self.assertTrue(any(command == "/model doctor" for command, _detail in model_doctor_matches))
         model_usage_matches = slash_palette_candidates("/model u")
         self.assertTrue(any(command == "/model usage" for command, _detail in model_usage_matches))
+        self.assertEqual(normalize_interactive_command("/setup check"), "/setup run-checks")
+        self.assertEqual(normalize_interactive_command("/setup checks"), "/setup run-checks")
+        self.assertEqual(normalize_interactive_command("/setup verify"), "/setup run-checks")
+        self.assertEqual(normalize_interactive_command("/setup doctor"), "/setup run-checks")
+        self.assertEqual(normalize_interactive_command("/setup model-auth"), "/setup model")
+        self.assertEqual(normalize_interactive_command("/setup connections"), "/setup connectors")
+        self.assertEqual(normalize_interactive_command("/setup skills"), "/setup memory")
+        self.assertEqual(normalize_interactive_command("/setup plugins"), "/setup memory")
+        self.assertEqual(normalize_interactive_command("/setup init"), "/setup")
+        advertised_commands = {command for command, _detail in SLASH_COMMANDS}
+        self.assertNotIn("/setup 1", advertised_commands)
+        self.assertNotIn("/setup backends", advertised_commands)
+        self.assertNotIn("/setup remote-control", advertised_commands)
+        self.assertNotIn("/setup interfaces", advertised_commands)
         connector_matches = slash_palette_candidates("/conn")
         self.assertTrue(any(command == "/connectors" for command, _detail in connector_matches))
         connector_doctor_matches = slash_palette_candidates("/connectors d")
@@ -370,6 +397,14 @@ class TuiRendererTests(unittest.TestCase):
             self.assertIn("AEGIS SETUP :: model", setup_model.getvalue())
             self.assertIn("aegis model configure", setup_model.getvalue())
 
+            setup_model_auth = io.StringIO()
+            with contextlib.redirect_stdout(setup_model_auth):
+                result = dispatch_interactive_command("/setup model-auth", paths)
+
+            self.assertEqual(result, "setup")
+            self.assertIn("AEGIS SETUP :: model", setup_model_auth.getvalue())
+            self.assertIn("aegis model configure", setup_model_auth.getvalue())
+
             setup_next = io.StringIO()
             with contextlib.redirect_stdout(setup_next):
                 result = dispatch_interactive_command("/setup next", paths)
@@ -402,9 +437,47 @@ class TuiRendererTests(unittest.TestCase):
                 result = dispatch_interactive_command("/setup first-task", paths)
 
             self.assertEqual(result, "setup")
-            self.assertIn("AEGIS SETUP :: first-task", first_task.getvalue())
+            self.assertIn("AEGIS SETUP FIRST TASK", first_task.getvalue())
             self.assertIn("/subagents live", first_task.getvalue())
-            self.assertIn('"browser_auto_launch": false', first_task.getvalue())
+            self.assertIn("browser_auto_launch: false", first_task.getvalue())
+
+            setup_connections = io.StringIO()
+            with contextlib.redirect_stdout(setup_connections):
+                result = dispatch_interactive_command("/setup connections", paths)
+
+            self.assertEqual(result, "setup")
+            self.assertIn("AEGIS SETUP :: connectors", setup_connections.getvalue())
+
+            setup_skills = io.StringIO()
+            with contextlib.redirect_stdout(setup_skills):
+                result = dispatch_interactive_command("/setup skills", paths)
+
+            self.assertEqual(result, "setup")
+            self.assertIn("AEGIS SETUP :: memory", setup_skills.getvalue())
+
+            setup_verify = io.StringIO()
+            with contextlib.redirect_stdout(setup_verify):
+                result = dispatch_interactive_command("/setup verify", paths)
+
+            self.assertEqual(result, "setup")
+            self.assertIn('"metadata_only": true', setup_verify.getvalue())
+            self.assertIn('"browser_auto_launch": false', setup_verify.getvalue())
+
+            setup_check = io.StringIO()
+            with contextlib.redirect_stdout(setup_check):
+                result = dispatch_interactive_command("/setup check", paths)
+
+            self.assertEqual(result, "setup")
+            self.assertIn('"metadata_only": true', setup_check.getvalue())
+            self.assertIn('"model_invocation_performed": false', setup_check.getvalue())
+
+            setup_init = io.StringIO()
+            with contextlib.redirect_stdout(setup_init):
+                result = dispatch_interactive_command("/setup init", paths)
+
+            self.assertEqual(result, "setup")
+            self.assertIn("AEGIS SETUP QUICKSTART", setup_init.getvalue())
+            self.assertIn("No browser is launched by setup", setup_init.getvalue())
 
             connectors = io.StringIO()
             with contextlib.redirect_stdout(connectors):

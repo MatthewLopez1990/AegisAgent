@@ -26,7 +26,16 @@ from aegisagent.core.lifecycle import format_install_status, format_update_statu
 from aegisagent.core.memory import MemoryStore
 from aegisagent.core.provider_config import ProviderStore, ProviderUsageStore
 from aegisagent.core.sessions import SessionStore
-from aegisagent.core.setup_flow import SETUP_SECTIONS, SetupGuide, format_setup_next, format_setup_quickstart, format_setup_section, terminal_command_name
+from aegisagent.core.setup_flow import (
+    SETUP_SECTIONS,
+    SetupGuide,
+    format_setup_first_task,
+    format_setup_next,
+    format_setup_quickstart,
+    format_setup_section,
+    normalize_setup_section,
+    terminal_command_name,
+)
 from aegisagent.core.setup_state import setup_wizard_preferences, update_setup_wizard_preferences
 from aegisagent.core.skills import SkillLoader, skill_audit_payload
 from aegisagent.core.subagents import (
@@ -94,13 +103,22 @@ SLASH_COMMANDS: tuple[tuple[str, str], ...] = (
     ("/setup", "open secure first-run setup"),
     ("/setup next", "show the next concrete setup action"),
     ("/setup model", "show model route setup steps"),
+    ("/setup model-auth", "alias for model route setup steps"),
     ("/setup secrets", "show secret-handle setup steps"),
     ("/setup sandbox", "show sandbox readiness"),
     ("/setup tools", "show tool-policy setup steps"),
     ("/setup connectors", "show connector setup posture"),
+    ("/setup connections", "alias for connector setup posture"),
     ("/setup memory", "show memory and skills setup steps"),
+    ("/setup skills", "alias for memory and skills setup steps"),
+    ("/setup plugins", "alias for memory and skills setup steps"),
     ("/setup first-task", "show a safe first terminal task"),
     ("/setup run-checks", "run metadata-only setup checks"),
+    ("/setup check", "alias for metadata-only setup checks"),
+    ("/setup checks", "alias for metadata-only setup checks"),
+    ("/setup verify", "alias for metadata-only setup checks"),
+    ("/setup doctor", "alias for metadata-only setup checks"),
+    ("/setup init", "show the setup quickstart"),
     ("/setup hide", "hide the setup wizard on default TUI launch"),
     ("/setup reset", "show the setup wizard on default TUI launch"),
     ("/setup json", "print setup quickstart as machine-readable JSON"),
@@ -274,13 +292,20 @@ COMMAND_MENU_GROUPS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
             ("/setup", "open secure first-run setup"),
             ("/setup next", "show the next concrete setup action"),
             ("/setup model", "show provider configuration steps"),
+            ("/setup model-auth", "alias for provider configuration steps"),
             ("/setup secrets", "show safe secret-handle guidance"),
             ("/setup sandbox", "show sandbox and host-execution posture"),
             ("/setup tools", "show tool approval posture"),
             ("/setup connectors", "show connector readiness posture"),
+            ("/setup connections", "alias for connector readiness posture"),
             ("/setup memory", "show memory and skills readiness"),
+            ("/setup skills", "alias for memory and skills readiness"),
             ("/setup first-task", "show a safe starter task"),
             ("/setup run-checks", "run metadata-only setup checks"),
+            ("/setup check", "alias for setup checks"),
+            ("/setup checks", "alias for setup checks"),
+            ("/setup verify", "alias for setup checks"),
+            ("/setup doctor", "alias for setup checks"),
             ("/setup hide", "hide first-launch wizard"),
             ("/setup reset", "restore first-launch wizard"),
             ("/model providers", "show provider route readiness"),
@@ -1141,6 +1166,7 @@ def dispatch_interactive_command(command: str, paths: RuntimePaths) -> str:
         return "capabilities"
     if command.startswith("/setup"):
         setup_args = command.removeprefix("/setup").strip()
+        setup_args = normalize_setup_section(setup_args)
         setup_guide = SetupGuide(paths)
         if setup_args in {"hide", "dismiss"}:
             state = update_setup_wizard_preferences(paths, hidden=True)
@@ -1177,27 +1203,7 @@ def dispatch_interactive_command(command: str, paths: RuntimePaths) -> str:
             print_json({"setup_wizard": state, "receipt": receipt["id"]})
             return "setup"
         if setup_args == "first-task":
-            print("AEGIS SETUP :: first-task")
-            print("status  ready")
-            print("")
-            print("Try one safe terminal task. It uses the local terminal provider, audited typed tools, and no browser launch.")
-            print("")
-            print("commands")
-            print("- /submit summarize this workspace")
-            print("- /tasks submit draft a safe plan")
-            print("- /tasks bg inspect terminal onboarding gaps")
-            print("- /subagents live compare current TUI against the prior Aegis-Agent terminal flow")
-            print("")
-            print("checks")
-            print_json(
-                {
-                    "terminal_first": True,
-                    "browser_auto_launch": False,
-                    "external_action_started": False,
-                    "raw_secret_values_included": False,
-                    "model_invocation_performed_until_submitted": False,
-                }
-            )
+            print(format_setup_first_task(setup_guide.first_task_payload()))
             return "setup"
         if setup_args == "json":
             print_json(setup_guide.quickstart())
@@ -1211,7 +1217,7 @@ def dispatch_interactive_command(command: str, paths: RuntimePaths) -> str:
         if setup_args in SETUP_SECTIONS:
             print(format_setup_section(setup_guide.section(setup_args)))
             return "setup"
-        if setup_args in {"run-checks", "checks", "doctor"}:
+        if setup_args == "run-checks":
             print_json(setup_guide.run_checks())
             return "setup"
         command_name = terminal_command_name()
@@ -1850,6 +1856,19 @@ def normalize_interactive_command(command: str) -> str:
     stripped = command.strip()
     if stripped.startswith("//"):
         return "/" + stripped.lstrip("/")
+    setup_aliases = {
+        "/setup check": "/setup run-checks",
+        "/setup checks": "/setup run-checks",
+        "/setup verify": "/setup run-checks",
+        "/setup doctor": "/setup run-checks",
+        "/setup model-auth": "/setup model",
+        "/setup connections": "/setup connectors",
+        "/setup skills": "/setup memory",
+        "/setup plugins": "/setup memory",
+        "/setup init": "/setup",
+    }
+    if stripped in setup_aliases:
+        return setup_aliases[stripped]
     return stripped
 
 

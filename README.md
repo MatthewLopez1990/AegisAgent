@@ -11,6 +11,9 @@ AegisAgent does not open a browser during install, setup, update, launch, health
 checks, or normal terminal use. The web console is optional and must be started
 separately.
 
+This repository and package are `AegisAgent`. Older `Aegis-Agent` references
+are historical design inputs, not the install target for this terminal command.
+
 ## Install On macOS Or Linux
 
 Prerequisites:
@@ -59,10 +62,12 @@ Then start the TUI:
 
 ```bash
 aegis
+aegis tui
 ```
 
-In an interactive terminal, `aegis` opens the terminal UI. In a non-interactive
-shell, it prints the terminal activation card instead of opening a web server.
+In an interactive terminal, `aegis` opens the terminal UI. `aegis tui` is the
+explicit equivalent. In a non-interactive shell, `aegis` prints the terminal
+activation card instead of opening a web server.
 
 On first launch, the TUI opens with the setup wizard visible. The prompt stays
 active while the wizard is open, so you can type a task, use slash commands, or
@@ -73,6 +78,7 @@ Useful first commands inside the TUI:
 
 ```text
 /setup next
+/setup first-task
 /commands
 /dashboard
 /setup hide
@@ -148,6 +154,9 @@ AEGIS_REPO_URL="https://github.com/MatthewLopez1990/AegisAgent.git"
 
 ```bash
 aegis                         # start the terminal UI
+aegis tui                     # explicit terminal UI launch
+aegis activate                # launch TUI in a TTY, activation card otherwise
+aegis activation              # print terminal activation/readiness card
 aegis setup next              # show the next setup action
 aegis setup model             # review or configure the model route
 aegis setup --run-checks      # run metadata-only readiness checks
@@ -159,6 +168,29 @@ aegis update --approved       # pull latest main from GitHub
 ```
 
 More commands are listed in [docs/operator-reference.md](docs/operator-reference.md).
+
+## Compatibility Aliases
+
+The canonical command is `aegis`. The Python package also exposes
+`aegisagent` for source and package workflows.
+
+Implemented setup aliases are intentionally small and terminal-only:
+
+```bash
+aegis setup init              # setup quickstart
+aegis setup model-auth        # same setup section as model
+aegis setup check             # same readiness receipt as --run-checks
+aegis setup checks            # same readiness receipt as --run-checks
+aegis setup verify            # same readiness receipt as --run-checks
+aegis setup doctor            # same readiness receipt as --run-checks
+aegis setup connections       # same setup section as connectors
+aegis setup skills            # same setup section as memory
+aegis setup plugins           # same setup section as memory
+```
+
+Inside the TUI, the matching slash commands work the same way:
+`/setup model-auth`, `/setup verify`, `/setup connections`, and
+`/setup skills` route to the canonical setup screens.
 
 ## Model And Secret Setup
 

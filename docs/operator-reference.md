@@ -6,6 +6,8 @@ This reference lists common terminal and TUI commands after AegisAgent is instal
 
 ```bash
 aegis
+aegis tui
+aegis activate
 aegis activation
 aegis setup next
 aegis setup model
@@ -18,16 +20,73 @@ aegis capabilities --gaps
 aegis update --approved
 ```
 
+`aegisagent` is also installed by the Python package and routes to the same CLI.
+
+## Aliases And Shortcuts
+
+Implemented aliases map to existing terminal-only behavior. They do not start
+the web gateway, launch a browser, deliver connector messages, or store raw
+secrets.
+
+```bash
+aegis                       same terminal-first default as aegis tui in a TTY
+aegis tui                   explicit TUI launch
+aegis activate              launch TUI in a TTY, activation card outside a TTY
+aegis activation            print activation/readiness card
+aegisagent                  package-installed alias for the same CLI
+
+aegis setup init            setup quickstart
+aegis setup model-auth      model setup section
+aegis setup check           metadata-only setup checks
+aegis setup checks          metadata-only setup checks
+aegis setup verify          metadata-only setup checks
+aegis setup doctor          metadata-only setup checks
+aegis setup connections     connector setup section
+aegis setup skills          memory and skills setup section
+aegis setup plugins         memory and skills setup section
+aegis setup first-task      safe first terminal task guidance
+```
+
+```text
+/menu                       grouped command lanes
+/activate                   activation card alias
+/q <request>                quick task submit
+/setup continue             next setup step
+/setup model-auth           model setup section
+/setup check|checks|verify  setup run-checks
+/setup doctor               setup run-checks
+/setup connections          connector setup section
+/setup skills|plugins       memory and skills setup section
+/setup dismiss              hide first-launch setup wizard
+/tasks background <req>     same as /tasks bg <req>
+/tasks live <id>            same watch surface as /tasks watch <id>
+/agents stream <task>       same as /agents live <task>
+/improve handoff <id>       same as /improve implement <id>
+/improve candidate-diff     same as /improve diff
+/improve apply-candidate    same as /improve apply
+/improve implemented        same as /improve complete
+```
+
 ## TUI Slash Commands
 
 ```text
 /commands
 /setup next
 /setup model
+/setup model-auth
 /setup sandbox
 /setup tools
 /setup connectors
+/setup connections
+/setup memory
+/setup skills
+/setup plugins
+/setup first-task
 /setup run-checks
+/setup check
+/setup verify
+/setup doctor
+/setup init
 /dashboard
 /capabilities
 /gaps

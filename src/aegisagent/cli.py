@@ -22,7 +22,16 @@ from aegisagent.core.improvement import ImprovementStore, format_candidate, form
 from aegisagent.core.lifecycle import format_install_status, format_update_status, install_status_payload, install_terminal_shim, update_from_github
 from aegisagent.core.memory import MemoryStore, memory_files
 from aegisagent.core.provider_config import ProviderStore, ProviderUsageStore
-from aegisagent.core.setup_flow import SETUP_SECTIONS, SetupGuide, format_setup_next, format_setup_quickstart, format_setup_section
+from aegisagent.core.setup_flow import (
+    SETUP_SECTION_CHOICES,
+    SETUP_SECTIONS,
+    SetupGuide,
+    format_setup_first_task,
+    format_setup_next,
+    format_setup_quickstart,
+    format_setup_section,
+    normalize_setup_section,
+)
 from aegisagent.core.sessions import SessionStore
 from aegisagent.core.skills import SkillLoader, skill_audit_payload
 from aegisagent.core.subagents import (
@@ -70,7 +79,8 @@ def build_parser() -> argparse.ArgumentParser:
     completion.add_argument("--program", default="", help="Installed command name. Defaults to the active terminal command.")
 
     setup = sub.add_parser("setup", help="Create local runtime files and show secure setup flow.")
-    setup.add_argument("section", nargs="?", choices=(*SETUP_SECTIONS, "next"), help="Show one setup section or the next setup action.")
+    setup.add_argument("section", nargs="?", choices=SETUP_SECTION_CHOICES, help="Show one setup section or the next setup action.")
+    setup.add_argument("--init", action="store_true", help="Show the terminal setup quickstart and initialize local runtime metadata.")
     setup.add_argument("--quick", action="store_true", help="Print the compact setup quickstart.")
     setup.add_argument("--full", action="store_true", help="Emit the full setup quickstart payload as JSON.")
     setup.add_argument("--run-checks", action="store_true")
@@ -296,15 +306,22 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "setup":
         setup_guide = SetupGuide(paths)
-        if args.section == "next":
+        setup_section = normalize_setup_section(args.section)
+        if setup_section == "next":
             print(json.dumps(setup_guide.next_payload(), indent=2) if args.json else format_setup_next(setup_guide.priority()))
-        elif args.run_checks or args.json:
+        elif args.run_checks or setup_section == "run-checks" or (args.json and not setup_section and not args.full and not args.quick and not args.init):
             print(json.dumps(setup_guide.run_checks(), indent=2))
-        elif args.section:
-            print(format_setup_section(setup_guide.section(args.section)))
+        elif setup_section == "first-task":
+            payload = setup_guide.first_task_payload()
+            print(json.dumps(payload, indent=2) if args.json else format_setup_first_task(payload))
+        elif setup_section:
+            if setup_section == "quickstart" or args.init:
+                print(json.dumps(setup_guide.quickstart(), indent=2) if args.full or args.json else format_setup_quickstart(setup_guide.quickstart()))
+            else:
+                print(format_setup_section(setup_guide.section(setup_section)))
         elif args.full:
             print(json.dumps(setup_guide.quickstart(), indent=2))
-        elif args.quick:
+        elif args.quick or args.init:
             print(format_setup_quickstart(setup_guide.quickstart()))
         else:
             print(format_setup_quickstart(setup_guide.quickstart()))
