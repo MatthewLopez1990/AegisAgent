@@ -48,6 +48,7 @@ from aegisagent.core.subagents import (
     format_agent_profiles,
     format_agent_status,
     format_artifact,
+    format_artifact_graph,
     format_artifact_search,
     format_artifacts,
     format_background_job,
@@ -55,6 +56,7 @@ from aegisagent.core.subagents import (
     format_delegation,
     format_event_line,
     format_events,
+    format_synthesis,
     format_stop,
     format_subagent_records,
 )
@@ -210,6 +212,8 @@ SLASH_COMMANDS: tuple[tuple[str, str], ...] = (
     ("/subagents artifacts", "list durable role artifacts"),
     ("/subagents artifacts show", "show one durable role artifact"),
     ("/subagents artifacts search", "search durable role artifacts"),
+    ("/subagents synthesis", "show coordinator final synthesis for a root delegation"),
+    ("/subagents graph", "show coordinator artifact graph for a root delegation"),
     ("/subagents live", "delegate and stream local worker progress; add | use-artifact <id> | approve to reuse approved context"),
     ("/subagents bg", "start background subagent work and keep composer usable"),
     ("/subagents monitor", "live repaint background subagent job progress"),
@@ -222,6 +226,8 @@ SLASH_COMMANDS: tuple[tuple[str, str], ...] = (
     ("/agents artifacts", "list durable role artifacts"),
     ("/agents artifacts show", "show one durable role artifact"),
     ("/agents artifacts search", "search durable role artifacts"),
+    ("/agents synthesis", "show coordinator final synthesis for a root delegation"),
+    ("/agents graph", "show coordinator artifact graph for a root delegation"),
     ("/agents live", "delegate and stream Hermes-style local agent progress; add | use-artifact <id> | approve to reuse approved context"),
     ("/agents stream", "alias for /agents live"),
     ("/agents bg", "start background agent work and keep composer usable"),
@@ -408,6 +414,8 @@ COMMAND_MENU_GROUPS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
             ("/subagents artifacts", "list durable role artifacts"),
             ("/subagents artifacts show <artifact-id>", "show one durable role artifact"),
             ("/subagents artifacts search <query>", "search durable role artifacts"),
+            ("/subagents synthesis <root-id>", "show coordinator final synthesis"),
+            ("/subagents graph <root-id>", "show coordinator artifact graph"),
             ("/subagents live <task>", "delegate and stream bounded workers"),
             ("/subagents live <task> | use-artifact <id> | approve", "delegate and stream bounded workers with approved prior context"),
             ("/subagents bg <task>", "start background subagent work"),
@@ -421,6 +429,8 @@ COMMAND_MENU_GROUPS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
             ("/agents artifacts", "list durable role artifacts"),
             ("/agents artifacts show <artifact-id>", "show one durable role artifact"),
             ("/agents artifacts search <query>", "search durable role artifacts"),
+            ("/agents synthesis <root-id>", "show coordinator final synthesis"),
+            ("/agents graph <root-id>", "show coordinator artifact graph"),
             ("/agents bg <task>", "start background agent work"),
             ("/agents monitor <job-id>", "live repaint background agent progress"),
             ("/dashboard", "show terminal operator posture"),
@@ -456,6 +466,8 @@ COMMAND_MENU_GROUPS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
             ("/subagents artifacts", "list durable role artifacts"),
             ("/subagents artifacts show <artifact-id>", "show one durable role artifact"),
             ("/subagents artifacts search <query>", "search durable role artifacts"),
+            ("/subagents synthesis <root-id>", "show coordinator final synthesis"),
+            ("/subagents graph <root-id>", "show coordinator artifact graph"),
             ("/subagents jobs", "list background jobs"),
             ("/subagents monitor <job-id>", "live subagent job monitor in the TUI"),
             ("/subagents unwatch", "stop active subagent job monitor"),
@@ -980,7 +992,7 @@ class _CursesAegisAgent:
             self.message = "No slash command matches."
             return
         command = palette[min(self.palette_index, len(palette) - 1)][0]
-        self.input_buffer = command + (" " if command in {"/policy shell", "/read", "/git diff", "/git stage", "/git commit", "/git branch", "/git remote", "/edit replace", "/test", "/verify", "/sessions search", "/submit", "/add-dir", "/memory add", "/memory search", "/memory show", "/memory delete", "/connectors draft", "/connectors send", "/web fetch", "/browser open", "/browser screenshot", "/tasks submit", "/tasks bg", "/tasks run", "/tasks start", "/tasks events", "/tasks output", "/tasks logs", "/tasks watch", "/tasks cancel", "/automations create", "/automations trigger", "/automations pause", "/automations resume", "/automations delete", "/improve propose", "/improve approve", "/improve implement", "/improve handoff", "/improve candidate", "/improve diff", "/improve verify", "/improve apply", "/improve evidence", "/improve complete", "/improve reject", "/model connect", "/subagents bg", "/subagents live", "/subagents monitor", "/subagents cancel", "/subagents artifacts show", "/subagents artifacts search", "/agents delegate", "/agents bg", "/agents live", "/agents monitor", "/agents cancel", "/agents artifacts show", "/agents artifacts search", "/q"} else "")
+        self.input_buffer = command + (" " if command in {"/policy shell", "/read", "/git diff", "/git stage", "/git commit", "/git branch", "/git remote", "/edit replace", "/test", "/verify", "/sessions search", "/submit", "/add-dir", "/memory add", "/memory search", "/memory show", "/memory delete", "/connectors draft", "/connectors send", "/web fetch", "/browser open", "/browser screenshot", "/tasks submit", "/tasks bg", "/tasks run", "/tasks start", "/tasks events", "/tasks output", "/tasks logs", "/tasks watch", "/tasks cancel", "/automations create", "/automations trigger", "/automations pause", "/automations resume", "/automations delete", "/improve propose", "/improve approve", "/improve implement", "/improve handoff", "/improve candidate", "/improve diff", "/improve verify", "/improve apply", "/improve evidence", "/improve complete", "/improve reject", "/model connect", "/subagents bg", "/subagents live", "/subagents monitor", "/subagents cancel", "/subagents synthesis", "/subagents graph", "/subagents artifacts show", "/subagents artifacts search", "/agents delegate", "/agents bg", "/agents live", "/agents monitor", "/agents cancel", "/agents synthesis", "/agents graph", "/agents artifacts show", "/agents artifacts search", "/q"} else "")
         self.cursor = len(self.input_buffer)
         self.message = f"Completed {command}; add args or press Enter."
 
@@ -1776,7 +1788,25 @@ def dispatch_interactive_command(command: str, paths: RuntimePaths) -> str:
     if command.startswith("/subagents"):
         task = command.removeprefix("/subagents").strip()
         orchestrator = LocalSubagentOrchestrator(paths)
-        if task in {"artifacts", "artifact list"}:
+        if task.startswith("synthesis "):
+            root_id = task.removeprefix("synthesis ").strip()
+            try:
+                synthesis = orchestrator.synthesis(root_id)
+            except KeyError as exc:
+                print(f"Synthesis not found: {exc}")
+            else:
+                audit.append("subagent.synthesis.read", {"surface": "tui", "root_id": root_id, "synthesis_id": synthesis.get("id", ""), "browser_auto_launch": False, "external_action_started": False, "raw_secret_values_included": False})
+                print(format_synthesis(synthesis))
+        elif task.startswith("graph ") or task.startswith("artifact-graph "):
+            root_id = task.removeprefix("graph ").removeprefix("artifact-graph ").strip()
+            try:
+                graph = orchestrator.artifact_graph(root_id)
+            except KeyError as exc:
+                print(f"Artifact graph not found: {exc}")
+            else:
+                audit.append("subagent.artifact_graph.read", {"surface": "tui", "root_id": root_id, "synthesis_id": graph.get("synthesis_id", ""), "node_count": len(graph.get("nodes", [])), "edge_count": len(graph.get("edges", [])), "browser_auto_launch": False, "external_action_started": False, "raw_secret_values_included": False})
+                print(format_artifact_graph(graph))
+        elif task in {"artifacts", "artifact list"}:
             store = SubagentStore(paths)
             rows = store.artifacts()
             audit.append("subagent.artifacts.listed", {"surface": "tui", "count": len(rows), "limit": 50, "browser_auto_launch": False, "external_action_started": False, "raw_secret_values_included": False})
@@ -1856,6 +1886,24 @@ def dispatch_interactive_command(command: str, paths: RuntimePaths) -> str:
             print(format_agent_profiles())
         elif task == "contracts":
             print(format_agent_contracts(agent_contracts_payload(paths)))
+        elif task.startswith("synthesis "):
+            root_id = task.removeprefix("synthesis ").strip()
+            try:
+                synthesis = orchestrator.synthesis(root_id)
+            except KeyError as exc:
+                print(f"Synthesis not found: {exc}")
+            else:
+                audit.append("subagent.synthesis.read", {"surface": "agents_tui", "root_id": root_id, "synthesis_id": synthesis.get("id", ""), "browser_auto_launch": False, "external_action_started": False, "raw_secret_values_included": False})
+                print(format_synthesis(synthesis).replace("SUBAGENT SYNTHESIS", "AGENT SYNTHESIS", 1))
+        elif task.startswith("graph ") or task.startswith("artifact-graph "):
+            root_id = task.removeprefix("graph ").removeprefix("artifact-graph ").strip()
+            try:
+                graph = orchestrator.artifact_graph(root_id)
+            except KeyError as exc:
+                print(f"Artifact graph not found: {exc}")
+            else:
+                audit.append("subagent.artifact_graph.read", {"surface": "agents_tui", "root_id": root_id, "synthesis_id": graph.get("synthesis_id", ""), "node_count": len(graph.get("nodes", [])), "edge_count": len(graph.get("edges", [])), "browser_auto_launch": False, "external_action_started": False, "raw_secret_values_included": False})
+                print(format_artifact_graph(graph).replace("SUBAGENT ARTIFACT GRAPH", "AGENT ARTIFACT GRAPH", 1))
         elif task.startswith("delegate "):
             try:
                 result = _delegate_with_reuse(orchestrator, task.removeprefix("delegate ").strip())

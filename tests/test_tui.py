@@ -1413,7 +1413,9 @@ class TuiRendererTests(unittest.TestCase):
             self.assertEqual(result, "subagents")
             self.assertIn("SUBAGENT DELEGATION", output.getvalue())
             self.assertIn("planner", output.getvalue())
+            self.assertIn("synthesis", output.getvalue())
             self.assertNotIn('{"root"', output.getvalue())
+            root_id = next(line.split()[1] for line in output.getvalue().splitlines() if line.startswith("root"))
             planner_artifact = next(row["id"] for row in SubagentStore(paths).artifacts() if row["role"] == "planner")
             artifacts = io.StringIO()
             with contextlib.redirect_stdout(artifacts):
@@ -1433,6 +1435,17 @@ class TuiRendererTests(unittest.TestCase):
             self.assertEqual(result, "subagents")
             self.assertIn("SUBAGENT ARTIFACT SEARCH", artifact_search.getvalue())
             self.assertIn(planner_artifact, artifact_search.getvalue())
+            synthesis = io.StringIO()
+            with contextlib.redirect_stdout(synthesis):
+                result = dispatch_interactive_command(f"/subagents synthesis {root_id}", paths)
+            self.assertEqual(result, "subagents")
+            self.assertIn("SUBAGENT SYNTHESIS", synthesis.getvalue())
+            graph = io.StringIO()
+            with contextlib.redirect_stdout(graph):
+                result = dispatch_interactive_command(f"/subagents graph {root_id}", paths)
+            self.assertEqual(result, "subagents")
+            self.assertIn("SUBAGENT ARTIFACT GRAPH", graph.getvalue())
+            self.assertIn(planner_artifact, graph.getvalue())
             blocked = io.StringIO()
             with contextlib.redirect_stdout(blocked):
                 result = dispatch_interactive_command(f"/subagents continue from prior | use-artifact {planner_artifact}", paths)
@@ -1449,6 +1462,8 @@ class TuiRendererTests(unittest.TestCase):
             self.assertIn("subagent.artifact.read", audit)
             self.assertIn("subagent.artifacts.searched", audit)
             self.assertIn("subagent.artifacts.reused", audit)
+            self.assertIn("subagent.synthesis.read", audit)
+            self.assertIn("subagent.artifact_graph.read", audit)
             self.assertIn('"browser_auto_launch": false', audit)
             self.assertIn('"raw_secret_values_included": false', audit)
 
@@ -1488,6 +1503,8 @@ class TuiRendererTests(unittest.TestCase):
             self.assertEqual(result, "agents")
             self.assertIn("AGENT DELEGATION", delegated.getvalue())
             self.assertIn("planner", delegated.getvalue())
+            self.assertIn("synthesis", delegated.getvalue())
+            root_id = next(line.split()[1] for line in delegated.getvalue().splitlines() if line.startswith("root"))
             planner_artifact = next(row["id"] for row in SubagentStore(paths).artifacts() if row["role"] == "planner")
 
             artifacts = io.StringIO()
@@ -1513,6 +1530,20 @@ class TuiRendererTests(unittest.TestCase):
             self.assertEqual(result, "agents")
             self.assertIn("AGENT ARTIFACT SEARCH", artifact_search.getvalue())
             self.assertIn(planner_artifact, artifact_search.getvalue())
+
+            synthesis = io.StringIO()
+            with contextlib.redirect_stdout(synthesis):
+                result = dispatch_interactive_command(f"/agents synthesis {root_id}", paths)
+
+            self.assertEqual(result, "agents")
+            self.assertIn("AGENT SYNTHESIS", synthesis.getvalue())
+
+            graph = io.StringIO()
+            with contextlib.redirect_stdout(graph):
+                result = dispatch_interactive_command(f"/agents graph {root_id}", paths)
+
+            self.assertEqual(result, "agents")
+            self.assertIn("AGENT ARTIFACT GRAPH", graph.getvalue())
 
             blocked_reuse = io.StringIO()
             with contextlib.redirect_stdout(blocked_reuse):

@@ -44,11 +44,13 @@ from aegisagent.core.subagents import (
     format_agent_profiles,
     format_agent_status,
     format_artifact,
+    format_artifact_graph,
     format_artifact_search,
     format_artifacts,
     format_background_job,
     format_background_jobs,
     format_event_line,
+    format_synthesis,
 )
 from aegisagent.core.tasks import TaskRunner, format_task_outputs, format_task_worker_logs
 from aegisagent.core.tools import ToolRegistry, enabled_counts
@@ -267,11 +269,13 @@ def build_parser() -> argparse.ArgumentParser:
     subagents.add_argument("--artifacts", action="store_true", help="List durable subagent role artifacts.")
     subagents.add_argument("--artifact", metavar="ARTIFACT_ID", help="Show one durable subagent role artifact.")
     subagents.add_argument("--artifact-search", metavar="QUERY", help="Search durable subagent role artifacts.")
+    subagents.add_argument("--synthesis", metavar="ROOT_ID", help="Show coordinator final synthesis for a root delegation id.")
+    subagents.add_argument("--artifact-graph", metavar="ROOT_ID", help="Show coordinator artifact graph for a root delegation id.")
     subagents.add_argument("--use-artifact", action="append", default=[], help="Approved prior artifact id to reuse as starting context for --delegate or --stream.")
     subagents.add_argument("--approved", action="store_true", help="Approve cross-delegation artifact reuse.")
 
     agents = sub.add_parser("agents", help="Hermes-style agent surface backed by governed local subagents.")
-    agents.add_argument("agent_command", nargs="?", default="status", choices=["status", "profiles", "contracts", "delegate", "stream", "background", "bg", "jobs", "job", "monitor", "cancel", "recover", "artifacts", "artifact", "search-artifacts"], help="Agent command to run.")
+    agents.add_argument("agent_command", nargs="?", default="status", choices=["status", "profiles", "contracts", "delegate", "stream", "background", "bg", "jobs", "job", "monitor", "cancel", "recover", "artifacts", "artifact", "search-artifacts", "synthesis", "graph"], help="Agent command to run.")
     agents.add_argument("agent_args", nargs="*", help="Task text, job id, or root id for the selected agent command.")
     agents.add_argument("--use-artifact", action="append", default=[], help="Approved prior artifact id to reuse as starting context for delegate or stream.")
     agents.add_argument("--approved", action="store_true", help="Approve cross-delegation artifact reuse.")
@@ -1159,6 +1163,22 @@ def main(argv: list[str] | None = None) -> int:
         elif args.events:
             events = orchestrator.events(args.events)
             print(json.dumps({"root_id": args.events, "events": [event.to_dict() for event in events]}, indent=2))
+        elif args.synthesis:
+            try:
+                synthesis = orchestrator.synthesis(args.synthesis)
+            except KeyError as exc:
+                parser.error(str(exc))
+            receipt = audit.append("subagent.synthesis.read", {"root_id": args.synthesis, "synthesis_id": synthesis.get("id", ""), "browser_auto_launch": False, "external_action_started": False, "raw_secret_values_included": False})
+            payload = {"synthesis": synthesis, "receipt": receipt["id"], "browser_auto_launch": False, "external_action_started": False}
+            print(json.dumps(payload, indent=2) if args.json else format_synthesis(synthesis))
+        elif args.artifact_graph:
+            try:
+                graph = orchestrator.artifact_graph(args.artifact_graph)
+            except KeyError as exc:
+                parser.error(str(exc))
+            receipt = audit.append("subagent.artifact_graph.read", {"root_id": args.artifact_graph, "synthesis_id": graph.get("synthesis_id", ""), "node_count": len(graph.get("nodes", [])), "edge_count": len(graph.get("edges", [])), "browser_auto_launch": False, "external_action_started": False, "raw_secret_values_included": False})
+            payload = {"graph": graph, "receipt": receipt["id"], "browser_auto_launch": False, "external_action_started": False}
+            print(json.dumps(payload, indent=2) if args.json else format_artifact_graph(graph))
         elif args.artifacts:
             store = SubagentStore(paths)
             rows = store.artifacts()
@@ -1250,6 +1270,28 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps(orchestrator.cancel_background(agent_args).to_dict(), indent=2))
         elif command == "recover":
             print(json.dumps({"recovered": [record.to_dict() for record in orchestrator.recover_stale_background()]}, indent=2))
+        elif command == "synthesis":
+            if not agent_args:
+                parser.error("agents synthesis requires a root id")
+            try:
+                synthesis = orchestrator.synthesis(agent_args)
+            except KeyError as exc:
+                parser.error(str(exc))
+            receipt = audit.append("subagent.synthesis.read", {"surface": "agents", "root_id": agent_args, "synthesis_id": synthesis.get("id", ""), "browser_auto_launch": False, "external_action_started": False, "raw_secret_values_included": False})
+            payload = {"synthesis": synthesis, "receipt": receipt["id"], "browser_auto_launch": False, "external_action_started": False}
+            text = format_synthesis(synthesis).replace("SUBAGENT SYNTHESIS", "AGENT SYNTHESIS", 1)
+            print(json.dumps(payload, indent=2) if args.json else text)
+        elif command == "graph":
+            if not agent_args:
+                parser.error("agents graph requires a root id")
+            try:
+                graph = orchestrator.artifact_graph(agent_args)
+            except KeyError as exc:
+                parser.error(str(exc))
+            receipt = audit.append("subagent.artifact_graph.read", {"surface": "agents", "root_id": agent_args, "synthesis_id": graph.get("synthesis_id", ""), "node_count": len(graph.get("nodes", [])), "edge_count": len(graph.get("edges", [])), "browser_auto_launch": False, "external_action_started": False, "raw_secret_values_included": False})
+            payload = {"graph": graph, "receipt": receipt["id"], "browser_auto_launch": False, "external_action_started": False}
+            text = format_artifact_graph(graph).replace("SUBAGENT ARTIFACT GRAPH", "AGENT ARTIFACT GRAPH", 1)
+            print(json.dumps(payload, indent=2) if args.json else text)
         elif command == "artifacts":
             artifact_args = args.agent_args
             store = SubagentStore(paths)

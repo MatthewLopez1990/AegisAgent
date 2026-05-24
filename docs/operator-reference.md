@@ -140,6 +140,8 @@ Root shortcuts do not create singular subcommand families; use `/tasks watch`,
 /agents
 /agents delegate <task>
 /agents delegate <task> | use-artifact <artifact-id> | approve
+/agents synthesis <root-id>
+/agents graph <root-id>
 /subagents bg <task>
 /automations
 /improve
@@ -196,9 +198,20 @@ aegis agents profiles
 aegis agents contracts
 aegis agents delegate "review the current plan"
 aegis agents delegate "continue from artifact" --use-artifact <artifact-id> --approved
+aegis agents artifacts
+aegis agents artifacts show <artifact-id>
+aegis agents artifacts search "final synthesis"
+aegis agents synthesis <root-id>
+aegis agents graph <root-id>
 aegis subagents --delegate "review the current plan"
 aegis subagents --delegate "continue from artifact" --use-artifact <artifact-id> --approved
+aegis subagents --synthesis <root-id>
+aegis subagents --artifact-graph <root-id>
 ```
+
+Completed delegations create a coordinator `final_synthesis` artifact that can
+be inspected through the same read-only artifact list/show/search commands or
+through the root-scoped synthesis and graph commands.
 
 ## Memory Review
 

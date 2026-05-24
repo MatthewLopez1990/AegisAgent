@@ -180,6 +180,7 @@ class SubagentRecord:
     primary_provider: str = ""
     artifacts: list[dict[str, Any]] = field(default_factory=list)
     input_artifacts: list[str] = field(default_factory=list)
+    final_synthesis: dict[str, Any] = field(default_factory=dict)
     created_at: str = field(default_factory=utc_now)
     updated_at: str = field(default_factory=utc_now)
 
@@ -205,6 +206,7 @@ class SubagentRecord:
             "primary_provider": self.primary_provider,
             "artifacts": self.artifacts,
             "input_artifacts": self.input_artifacts,
+            "final_synthesis": self.final_synthesis,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
         }
@@ -232,6 +234,7 @@ class SubagentRecord:
             primary_provider=str(data.get("primary_provider") or ""),
             artifacts=[artifact for artifact in data.get("artifacts", []) if isinstance(artifact, dict)],
             input_artifacts=[str(item) for item in data.get("input_artifacts", [])],
+            final_synthesis=data.get("final_synthesis") if isinstance(data.get("final_synthesis"), dict) else {},
             created_at=str(data.get("created_at") or utc_now()),
             updated_at=str(data.get("updated_at") or utc_now()),
         )
@@ -502,6 +505,7 @@ class SubagentDelegationResult:
         rows: list[dict[str, Any]] = []
         for worker in self.workers:
             rows.extend(worker.artifacts)
+        rows.extend(self.root.artifacts)
         return rows
 
     @property
@@ -843,13 +847,67 @@ class LocalSubagentOrchestrator:
                 context_artifacts.extend(child.artifacts)
                 workers.append(child)
 
+        synthesis_artifact = _synthesis_artifact_for_root(
+            self.paths,
+            root,
+            task,
+            workers,
+            generated_artifacts=generated_artifacts,
+            reused_artifacts=reused_artifacts,
+        )
+        root.artifacts = [synthesis_artifact]
+        root.final_synthesis = {
+            "id": f"synthesis-{root.id}",
+            "status": "completed",
+            "summary": synthesis_artifact["summary"],
+            "artifact_id": synthesis_artifact["id"],
+            "input_artifacts": list(synthesis_artifact["input_artifacts"]),
+            "generated_artifact_ids": [artifact["id"] for artifact in generated_artifacts],
+            "reused_artifact_ids": root.input_artifacts,
+            "artifact_graph": synthesis_artifact["artifact_graph"],
+            "provider": "local/terminal-v0",
+            "provider_mode": "local",
+            "provider_route_status": "local",
+            "usage_id": "",
+            "model_invocation_performed": False,
+            "external_model_invocation_performed": False,
+            "fallback_used": False,
+            "browser_auto_launch": False,
+            "external_action_started": False,
+            "raw_secret_values_included": False,
+        }
+        generated_artifacts.append(synthesis_artifact)
+        self.audit.append(
+            "subagent.coordinator.synthesis.completed",
+            {
+                "root_id": root.id,
+                "synthesis_id": root.final_synthesis["id"],
+                "artifact_id": synthesis_artifact["id"],
+                "source_artifact_ids": synthesis_artifact["input_artifacts"],
+                "source_artifact_count": len(synthesis_artifact["input_artifacts"]),
+                "artifact_graph_node_count": len(synthesis_artifact["artifact_graph"]["nodes"]),
+                "artifact_graph_edge_count": len(synthesis_artifact["artifact_graph"]["edges"]),
+                "provider": root.final_synthesis["provider"],
+                "provider_mode": root.final_synthesis["provider_mode"],
+                "provider_route_status": root.final_synthesis["provider_route_status"],
+                "usage_id": root.final_synthesis["usage_id"],
+                "contract_version": AGENT_CONTRACT_VERSION,
+                "model_invocation_performed": False,
+                "external_model_invocation_performed": False,
+                "external_action_started": False,
+                "browser_auto_launch": False,
+                "raw_secret_values_included": False,
+            },
+        )
+        self._event(events, root.id, "synthesis.completed", f"coordinator synthesized {len(synthesis_artifact['input_artifacts'])} artifact graph nodes", role=root.role, event_sink=event_sink)
+
         root.children = [worker.id for worker in workers]
-        root.summary = f"{len(workers)} model-backed local subagents completed bounded analysis with {len(generated_artifacts)} generated artifacts"
+        root.summary = f"{len(workers)} model-backed local subagents completed bounded analysis with {len(generated_artifacts)} generated artifacts including final synthesis"
         if reused_artifacts:
             root.summary += f" and {len(reused_artifacts)} approved reused artifacts"
         root.summary += f" for: {task}"
         root.status = "completed"
-        self.sessions.append(root.session_id, "assistant", root.summary, metadata={"source": "subagent", "role": root.role, "artifact_ids": [artifact["id"] for artifact in generated_artifacts], "reused_artifact_ids": root.input_artifacts})
+        self.sessions.append(root.session_id, "assistant", root.summary, metadata={"source": "subagent", "role": root.role, "artifact_ids": [artifact["id"] for artifact in generated_artifacts], "synthesis_artifact_id": synthesis_artifact["id"], "reused_artifact_ids": root.input_artifacts})
         self.store.save(root)
         self._event(events, root.id, "root.completed", root.summary, role=root.role, event_sink=event_sink)
         receipt = self.audit.append(
@@ -866,6 +924,14 @@ class LocalSubagentOrchestrator:
                 "artifact_count": len(generated_artifacts),
                 "generated_artifact_count": len(generated_artifacts),
                 "artifact_ids": [artifact["id"] for artifact in generated_artifacts],
+                "synthesis_id": root.final_synthesis["id"],
+                "synthesis_artifact_id": synthesis_artifact["id"],
+                "synthesis_artifact_count": 1,
+                "synthesis_summary": root.final_synthesis["summary"],
+                "synthesis_usage_id": root.final_synthesis["usage_id"],
+                "synthesis_input_artifact_count": len(root.final_synthesis["input_artifacts"]),
+                "artifact_graph_node_count": len(synthesis_artifact["artifact_graph"]["nodes"]),
+                "artifact_graph_edge_count": len(synthesis_artifact["artifact_graph"]["edges"]),
                 "reused_artifact_ids": root.input_artifacts,
                 "reused_artifact_count": len(reused_artifacts),
                 "artifact_reuse_approved": bool(reused_artifacts),
@@ -899,6 +965,26 @@ class LocalSubagentOrchestrator:
 
     def events(self, root_id: str, *, limit: int = 100) -> list[SubagentEvent]:
         return self.store.events(root_id, limit=limit)
+
+    def synthesis(self, root_id: str) -> dict[str, Any]:
+        record = self.store.get(root_id)
+        if not record.final_synthesis:
+            raise KeyError(f"synthesis not found for root: {root_id}")
+        return dict(record.final_synthesis)
+
+    def artifact_graph(self, root_id: str) -> dict[str, Any]:
+        synthesis = self.synthesis(root_id)
+        graph = synthesis.get("artifact_graph") if isinstance(synthesis.get("artifact_graph"), dict) else {}
+        return {
+            "root_id": root_id,
+            "synthesis_id": synthesis.get("id", ""),
+            "artifact_id": synthesis.get("artifact_id", ""),
+            "nodes": graph.get("nodes", []),
+            "edges": graph.get("edges", []),
+            "browser_auto_launch": False,
+            "external_action_started": False,
+            "raw_secret_values_included": False,
+        }
 
     def start_background(self, task: str) -> BackgroundJobRecord:
         jobs = BackgroundJobStore(self.paths)
@@ -1056,6 +1142,8 @@ def format_delegation(result: SubagentDelegationResult) -> str:
         lines.append(f"artifacts {len(artifacts)} durable role artifacts")
     if result.root.input_artifacts:
         lines.append(f"reused    {len(result.root.input_artifacts)} approved prior artifacts")
+    if result.root.artifacts:
+        lines.append(f"synthesis {result.root.artifacts[0].get('id', '')}")
     lines.extend(["", "workers"])
     for worker in result.workers:
         route_label = "" if route else f" {_worker_route_label(worker)} "
@@ -1066,6 +1154,49 @@ def format_delegation(result: SubagentDelegationResult) -> str:
             lines.append(f"- {artifact.get('role', ''):<11} {artifact.get('kind', ''):<18} {artifact.get('summary', '')}")
         if len(artifacts) > 6:
             lines.append(f"+ {len(artifacts) - 6} more artifacts; use --json for full metadata")
+    return "\n".join(lines)
+
+
+def format_synthesis(synthesis: dict[str, Any]) -> str:
+    graph = synthesis.get("artifact_graph") if isinstance(synthesis.get("artifact_graph"), dict) else {}
+    nodes = graph.get("nodes", []) if isinstance(graph.get("nodes"), list) else []
+    edges = graph.get("edges", []) if isinstance(graph.get("edges"), list) else []
+    lines = [
+        "SUBAGENT SYNTHESIS",
+        f"synthesis {synthesis.get('id', '')}  {synthesis.get('status', '')}",
+        f"artifact  {synthesis.get('artifact_id', '')}",
+        f"provider  {synthesis.get('provider', '')} mode={synthesis.get('provider_mode', '')} external={str(bool(synthesis.get('external_model_invocation_performed'))).lower()}",
+        f"graph     {len(nodes)} nodes / {len(edges)} edges",
+        "",
+        "summary",
+        str(synthesis.get("summary") or ""),
+    ]
+    return "\n".join(lines).rstrip()
+
+
+def format_artifact_graph(graph: dict[str, Any]) -> str:
+    nodes = graph.get("nodes", []) if isinstance(graph.get("nodes"), list) else []
+    edges = graph.get("edges", []) if isinstance(graph.get("edges"), list) else []
+    lines = [
+        "SUBAGENT ARTIFACT GRAPH",
+        f"root      {graph.get('root_id', '')}",
+        f"synthesis {graph.get('synthesis_id', '')}",
+        f"artifact  {graph.get('artifact_id', '')}",
+        "",
+        "nodes",
+    ]
+    if nodes:
+        for node in nodes[:50]:
+            lines.append(f"- {str(node.get('source', '')):<9} {str(node.get('role', '')):<12} {str(node.get('kind', '')):<18} {node.get('id', '')}")
+    else:
+        lines.append("- none")
+    lines.append("")
+    lines.append("edges")
+    if edges:
+        for edge in edges[:80]:
+            lines.append(f"- {edge.get('from', '')} -> {edge.get('to', '')}")
+    else:
+        lines.append("- none")
     return "\n".join(lines)
 
 
@@ -1375,6 +1506,97 @@ def _artifact_for_worker(paths: RuntimePaths, root_id: str, worker: SubagentReco
         "external_action_started": False,
         "raw_secret_values_included": False,
     }
+
+
+def _synthesis_artifact_for_root(
+    paths: RuntimePaths,
+    root: SubagentRecord,
+    task: str,
+    workers: list[SubagentRecord],
+    *,
+    generated_artifacts: list[dict[str, Any]],
+    reused_artifacts: list[dict[str, Any]],
+) -> dict[str, Any]:
+    source_artifacts = [*reused_artifacts, *generated_artifacts]
+    artifact_id = f"artifact-coordinator-{root.id}"
+    artifact_dir = paths.subagents_dir / "artifacts" / root.id
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    artifact_path = artifact_dir / f"{artifact_id}.md"
+    graph = _artifact_graph(source_artifacts, reused_artifacts=reused_artifacts)
+    role_lines = []
+    for worker in workers:
+        artifact_ids = ", ".join(artifact["id"] for artifact in worker.artifacts) or "none"
+        role_lines.append(f"- {worker.role}: {worker.summary} (artifacts: {artifact_ids})")
+    edge_lines = []
+    for edge in graph["edges"]:
+        edge_lines.append(f"- {edge['from']} -> {edge['to']}")
+    if not edge_lines:
+        edge_lines.append("- none")
+    body = (
+        "# Coordinator Final Synthesis\n\n"
+        f"- Root: {root.id}\n"
+        f"- Role: coordinator\n"
+        f"- Task: {task}\n"
+        f"- Reused artifacts: {len(reused_artifacts)}\n"
+        f"- Generated worker artifacts: {len(generated_artifacts)}\n"
+        f"- Graph nodes: {len(graph['nodes'])}\n"
+        f"- Graph edges: {len(graph['edges'])}\n\n"
+        "## Role Contributions\n\n"
+        + "\n".join(role_lines)
+        + "\n\n## Artifact Graph\n\n"
+        + "\n".join(edge_lines)
+        + "\n\n## Final Synthesis\n\n"
+        "Planner, researcher, implementer, and reviewer outputs were merged into a single coordinator artifact. "
+        "Use the graph above to trace which prior artifacts informed each later-stage worker and this final synthesis.\n"
+    )
+    redacted = redact_text(body)
+    artifact_path.write_text(redacted.text, encoding="utf-8")
+    encoded = redacted.text.encode("utf-8")
+    return {
+        "id": artifact_id,
+        "root_id": root.id,
+        "worker_id": root.id,
+        "role": "coordinator",
+        "kind": "final_synthesis",
+        "title": "Coordinator final synthesis over the artifact graph.",
+        "summary": f"Final synthesis over {len(graph['nodes'])} artifact graph nodes and {len(graph['edges'])} edges.",
+        "path": str(artifact_path),
+        "mime_type": "text/markdown",
+        "bytes": len(encoded),
+        "sha256": hashlib.sha256(encoded).hexdigest(),
+        "redacted": redacted.redacted,
+        "input_artifacts": [artifact["id"] for artifact in source_artifacts],
+        "artifact_graph": graph,
+        "content_included": False,
+        "created_at": utc_now(),
+        "browser_auto_launch": False,
+        "external_action_started": False,
+        "raw_secret_values_included": False,
+    }
+
+
+def _artifact_graph(artifacts: list[dict[str, Any]], *, reused_artifacts: list[dict[str, Any]]) -> dict[str, list[dict[str, str]]]:
+    reused_ids = {str(artifact.get("id") or "") for artifact in reused_artifacts}
+    nodes: list[dict[str, str]] = []
+    edges: list[dict[str, str]] = []
+    for artifact in artifacts:
+        artifact_id = str(artifact.get("id") or "")
+        if not artifact_id:
+            continue
+        nodes.append(
+            {
+                "id": artifact_id,
+                "role": str(artifact.get("role") or ""),
+                "kind": str(artifact.get("kind") or ""),
+                "summary": str(artifact.get("summary") or "")[:240],
+                "source": "reused" if artifact_id in reused_ids else "generated",
+            }
+        )
+        for input_artifact in artifact.get("input_artifacts", []):
+            input_id = str(input_artifact or "")
+            if input_id:
+                edges.append({"from": input_id, "to": artifact_id})
+    return {"nodes": nodes, "edges": edges}
 
 
 def _artifact_kind(role: str) -> str:

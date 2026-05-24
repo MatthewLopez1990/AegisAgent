@@ -333,6 +333,8 @@ def _validate_provider_inputs(*, mode: str, api_key_env: str, base_url: str) -> 
         parsed = urlparse(base_url)
         if parsed.username or parsed.password:
             raise ValueError("base-url must not include credentials")
+        if parsed.query or parsed.fragment:
+            raise ValueError("base-url must not include query strings or fragments")
 
 
 def _provider_route_name(provider: str, *, model: str = "") -> str:

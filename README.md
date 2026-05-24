@@ -247,7 +247,9 @@ workers through the active provider route, records isolated sessions, scoped
 usage metadata, durable role artifacts, input-artifact handoff metadata, and
 audit receipts, and falls back locally if an attempted external route fails.
 Later-stage workers receive prior worker artifact summaries while preserving the
-same bounded role contracts and approval model.
+same bounded role contracts and approval model. After the workers finish, the
+coordinator writes a final synthesis artifact over the generated and approved
+reused artifact graph so the delegation has one traceable final handoff.
 
 Artifact browsing is read-only by default. `aegis agents artifacts` lists
 durable role artifacts, `show` reads redacted artifact content, and `search`
@@ -269,8 +271,10 @@ In the terminal UI, use the same approval style as other gated actions:
 
 Aegis records reused artifact ids in session metadata and audit receipts, then
 passes artifact ids, roles, titles, and summaries as bounded context to staged
-workers. This is approved context reuse, not final synthesis over an artifact
-graph, and artifact bodies are not sent as model context by reuse.
+workers. Each completed delegation also writes a coordinator `final_synthesis`
+artifact that merges planner, researcher, implementer, reviewer, and approved
+reused artifact metadata over the artifact graph. Reuse still sends summary
+metadata only; artifact bodies are not sent as model context by reuse.
 
 ## Common Commands
 
@@ -410,12 +414,13 @@ ledger rows, connector metadata with a redacted approval-bound outbox, memory
 review controls, passive skill trust metadata, and local agent/subagent
 orchestration with provider fallback metadata, durable role artifacts,
 artifact list/show/search, stage-to-stage handoff metadata, and
-approval-gated reuse of selected prior artifacts as bounded summary context.
+approval-gated reuse of selected prior artifacts as bounded summary context, and
+coordinator final synthesis over artifact graphs.
 
 Partial: web console parity, live connectors, self-improvement, richer browser
 automation, multi-provider fallback ordering, subscription bridge readiness,
 richer role-specific tool budgets, and higher-depth delegation controls.
 
-Next: richer role-specific tool budgets, higher-depth delegation controls, final
-synthesis over artifact graphs, live browser control behind explicit approval,
-broader integrations, signed skill trust, and packaged release flows.
+Next: richer role-specific tool budgets, higher-depth delegation controls, live
+browser control behind explicit approval, broader integrations, signed skill
+trust, and packaged release flows.

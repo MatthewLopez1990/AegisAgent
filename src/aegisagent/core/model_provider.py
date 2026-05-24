@@ -447,6 +447,8 @@ def _validate_base_url(base_url: str) -> str:
     parsed = urllib.parse.urlparse(base_url)
     if parsed.username or parsed.password:
         return "provider base URL must not include credentials"
+    if parsed.query or parsed.fragment:
+        return "provider base URL must not include query strings or fragments"
     if parsed.scheme == "https":
         return ""
     if parsed.scheme == "http" and parsed.hostname in {"localhost", "127.0.0.1", "::1"}:
@@ -459,20 +461,21 @@ def _model_name(provider_name: str) -> str:
 
 
 def _messages_for_request(request: ModelRequest) -> list[dict[str, str]]:
+    safe_prompt = redact_text(request.prompt).text
     tool_summary = ""
     if request.tool_results:
-        tool_summary = "\n\nTyped tool results:\n" + json.dumps(request.tool_results[-6:], indent=2)[:8000]
+        tool_summary = "\n\nTyped tool results:\n" + redact_text(json.dumps(request.tool_results[-6:], indent=2)[:8000]).text
     artifact_summary = ""
     if request.context_artifacts:
-        artifact_summary = "\n\nContext artifacts:\n" + json.dumps(_artifact_context(request.context_artifacts), indent=2)[:8000]
+        artifact_summary = "\n\nContext artifacts:\n" + redact_text(json.dumps(_artifact_context(request.context_artifacts), indent=2)[:8000]).text
     recent = []
     for message in request.transcript[-8:]:
         role = str(message.get("role") or "")
         if role not in {"user", "assistant"}:
             continue
-        recent.append({"role": role, "content": str(message.get("content") or "")[:4000]})
-    if not recent or recent[-1].get("content") != request.prompt:
-        recent.append({"role": "user", "content": request.prompt})
+        recent.append({"role": role, "content": redact_text(str(message.get("content") or "")[:4000]).text})
+    if not recent or recent[-1].get("content") != safe_prompt:
+        recent.append({"role": "user", "content": safe_prompt})
     return [
         {
             "role": "system",

@@ -474,8 +474,13 @@ class TerminalAgentSessionTests(unittest.TestCase):
             self.assertEqual(tool["metadata"]["worker_provider_metadata"], rows)
             self.assertEqual(tool["metadata"]["worker_usage_ids"], [row["usage_id"] for row in rows])
             self.assertEqual(tool["metadata"]["worker_providers"], ["local/terminal-v0"])
-            self.assertEqual(tool["metadata"]["artifact_count"], 4)
-            self.assertEqual(len(tool["metadata"]["artifact_ids"]), 4)
+            self.assertEqual(tool["metadata"]["artifact_count"], 5)
+            self.assertEqual(len(tool["metadata"]["artifact_ids"]), 5)
+            self.assertTrue(any(artifact_id.startswith("artifact-coordinator-") for artifact_id in tool["metadata"]["artifact_ids"]))
+            self.assertRegex(tool["metadata"]["synthesis_id"], r"^synthesis-")
+            self.assertTrue(tool["metadata"]["synthesis_artifact_id"].startswith("artifact-coordinator-"))
+            self.assertEqual(tool["metadata"]["artifact_graph_node_count"], 4)
+            self.assertEqual(tool["metadata"]["artifact_graph_edge_count"], 5)
             self.assertEqual(len(tool["metadata"]["worker_artifact_ids"]), 4)
             self.assertEqual(tool["metadata"]["worker_input_artifacts_by_role"]["planner"], [])
             self.assertEqual(tool["metadata"]["worker_input_artifacts_by_role"]["researcher"], [])
@@ -486,7 +491,7 @@ class TerminalAgentSessionTests(unittest.TestCase):
             turn = next(receipt for receipt in receipts if receipt["event_type"] == "agent.turn.completed")
             self.assertEqual(turn["payload"]["delegated_worker_count"], 4)
             self.assertEqual(turn["payload"]["delegated_worker_providers"], ["local/terminal-v0"])
-            self.assertEqual(turn["payload"]["delegated_artifact_count"], 4)
+            self.assertEqual(turn["payload"]["delegated_artifact_count"], 5)
 
 
 class GovernedShellRunnerTests(unittest.TestCase):
